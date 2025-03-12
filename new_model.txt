@@ -1,0 +1,48 @@
+Revised Model (this might be it):
+
+Initial reserves/invariant:
+
+x_0 * y_0 = k_0
+y_liq = 0 (y reserve to be liquidated)
+w_y = 0 (total weight of the liquidation pool on the y side)
+x_liq = 0 (x reserve to be liquidated)
+w_x = 0 (total weight of the liquidation pool on the x side)
+
+
+Opening a leveraged position:
+
+Bob wants to swap x_b amount of X with leverage l_b.
+We swap x_b * l_b to output y_b
+
+New reserves:
+x = x_0 + x_b
+y = y_0 - y_b
+
+New invariant:
+(x_0 + x_b) * (y_0 - y_b) = k
+
+We update the total amount of y to be liquidated:
+y_liq += y_b
+
+We store Bob's weight in his position, along with the x_lev he 'borrowed' - (x_b * l_b) - x_b
+w_b = p_b * y_b, where p_b is the price of X immediately after the swap
+
+We update the total weight of the liquidation pool on the y side:
+y_w += w_b
+
+We compute the point on the curve (reserves) at which adding back y_liq will restore the invariant, by solving the system of equations:
+x_l * y_l = k
+x_l * (y_l + y_liq) = k_0
+
+
+Closing a leveraged position:
+
+Bob wants to close his leveraged position.
+
+We compute Bob's effective position size: y_e = (w_b / w_y) * y_liq
+
+We add x_lev to the x reserve: x += x_lev
+
+We swap y_e to output x_e, if it is >= x_lev, we swap and deduct x_lev from the output, sending the remaining output to Bob.
+
+If it is < x_lev, then Bob is in limbo (prob liquidated unless things go favourably)
