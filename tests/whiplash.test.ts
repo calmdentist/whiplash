@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { BN, Program } from "@coral-xyz/anchor";
-import { ultrasound } from "../target/types/whiplash";
+import { Whiplash } from "../target/types/whiplash";
 import { PublicKey, Keypair } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, createMint, createAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
@@ -8,7 +8,7 @@ import { assert } from "chai";
 describe("whiplash", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.Whiplash as Program<whiplash>;
+  const program = anchor.workspace.Whiplash as Program<Whiplash>;
 
   // Test variables
   let token0Mint: PublicKey;
