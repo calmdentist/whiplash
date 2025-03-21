@@ -1,54 +1,42 @@
 use anchor_lang::prelude::*;
 
-pub mod error;
-pub mod instructions;
-pub mod state;
-pub mod utils;
+mod instructions;
+mod state;
+mod error;
+mod events;
+
+pub use instructions::*;
+pub use state::*;
+pub use error::*;
+pub use events::*;
 
 declare_id!("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
-
-use instructions::*;
 
 #[program]
 pub mod whiplash {
     use super::*;
 
-    pub fn initialize_pool(
-        ctx: Context<InitializePool>,
-        fee_tier: u16,
-    ) -> Result<()> {
-        instructions::initialize_pool::handler(ctx, fee_tier)
+    pub fn initialize_pool(ctx: Context<InitializePool>, bump: u8) -> Result<()> {
+        instructions::initialize_pool::handle_initialize_pool(ctx, bump)
     }
 
     pub fn add_liquidity(
-        ctx: Context<AddLiquidity>,
-        amount_0: u64,
-        amount_1: u64,
+        ctx: Context<AddLiquidity>, 
+        amount_x_desired: u64, 
+        amount_y_desired: u64, 
+        amount_x_min: u64, 
+        amount_y_min: u64
     ) -> Result<()> {
-        instructions::add_liquidity::handler(ctx, amount_0, amount_1)
+        instructions::add_liquidity::handle_add_liquidity(
+            ctx, 
+            amount_x_desired, 
+            amount_y_desired, 
+            amount_x_min, 
+            amount_y_min
+        )
     }
 
-    pub fn remove_liquidity(
-        ctx: Context<RemoveLiquidity>,
-        liquidity: u128
-    ) -> Result<()> {
-        instructions::remove_liquidity::handler(ctx, liquidity)
+    pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
+        instructions::swap::handle_swap(ctx, amount_in, min_amount_out)
     }
-
-    pub fn swap(
-        ctx: Context<Swap>,
-        amount_in: u64,
-        minimum_amount_out: u64,
-    ) -> Result<()> {
-        instructions::swap::handler(ctx, amount_in, minimum_amount_out)
-    }
-
-    pub fn swap_leveraged(
-        ctx: Context<LeveragedSwap>,
-        amount_in: u64,
-        minimum_amount_out: u64,
-        leverage: u16,
-    ) -> Result<()> {
-        instructions::leveraged_swap::handler(ctx, amount_in, minimum_amount_out, leverage)
-    }
-} 
+}

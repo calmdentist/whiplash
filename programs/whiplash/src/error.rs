@@ -1,29 +1,34 @@
 use anchor_lang::prelude::*;
 
 #[error_code]
-pub enum SrAmmError {
-    #[msg("Pool already initialized")]
-    PoolAlreadyInitialized,
-    #[msg("Invalid slot window")]
-    InvalidSlotWindow,
+pub enum WhiplashError {
+    #[msg("Invalid token accounts")]
+    InvalidTokenAccounts,
+    
     #[msg("Insufficient liquidity")]
     InsufficientLiquidity,
-    #[msg("Price impact too high")]
-    PriceImpactTooHigh,
+    
+    #[msg("Invalid mint authority")]
+    InvalidMintAuthority,
+    
     #[msg("Slippage tolerance exceeded")]
-    SlippageExceeded,
-    #[msg("Invalid fee tier")]
-    InvalidFeeTier,
-    #[msg("Liquidity activation period not elapsed")]
-    LiquidityActivationPeriodNotElapsed,
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Math error")]
-    MathError,  
-    #[msg("Price out of bounds")]
-    PriceOutOfBounds,
-    #[msg("Initial price required")]
-    InitialPriceRequired,
-    #[msg("Invalid initial liquidity")]
-    InvalidInitialLiquidity,
+    SlippageToleranceExceeded,
+    
+    #[msg("Mathematical operation overflow")]
+    MathOverflow,
+    
+    #[msg("Pool already initialized")]
+    PoolAlreadyInitialized,
+    
+    #[msg("Zero liquidity provided")]
+    ZeroLiquidity,
+    
+    #[msg("Zero swap amount")]
+    ZeroSwapAmount,
+    
+    #[msg("Invalid pool state")]
+    InvalidPoolState,
+    
+    #[msg("Unauthorized operation")]
+    Unauthorized,
 } 

@@ -1,78 +1,75 @@
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::clock::Clock;
-use anchor_spl::token::{Mint, TokenAccount};
-use crate::state::*;
-use crate::state::bitmap::TickDataEntry;
+use anchor_spl::{
+    token::{Token, Mint, TokenAccount},
+    associated_token::AssociatedToken,
+};
+use crate::{state::*, events::*};
 
 #[derive(Accounts)]
+#[instruction(bump: u8)]
 pub struct InitializePool<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    
+    pub token_x_mint: Account<'info, Mint>,
+    
+    pub token_y_mint: Account<'info, Mint>,
+    
     #[account(
         init,
-        payer = user,
-        space = Pool::LEN,
-        seeds = [b"pool", token_0.key().as_ref(), token_1.key().as_ref()],
-        bump
+        seeds = [
+            b"pool".as_ref(),
+            token_x_mint.key().as_ref(),
+            token_y_mint.key().as_ref(),
+        ],
+        bump,
+        payer = authority,
+        space = Pool::LEN
     )]
-    pub pool: Box<Account<'info, Pool>>,
+    pub pool: Account<'info, Pool>,
     
-    #[account(init,
-        payer = user,
-        space = 8 +          // discriminator
-               32 +         // pool pubkey
-               4 +          // Vec length prefix for bitmap
-               256 +        // enough space for bitmap data
-               4 +          // Vec length prefix for tick_data
-               (32 * std::mem::size_of::<TickDataEntry>()), // initial capacity for tick data
-        seeds = [b"tickbitmap", pool.key().as_ref()],
-        bump
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = token_x_mint,
+        associated_token::authority = pool,
     )]
-    pub tick_bitmap: Account<'info, TickBitmap>,
+    pub token_x_vault: Account<'info, TokenAccount>,
     
-    #[account(mut)]
-    pub user: Signer<'info>,
-    pub token_0: Account<'info, Mint>,
-    pub token_1: Account<'info, Mint>,
-    #[account(mut)]
-    pub pool_token_account_0: Account<'info, TokenAccount>,
-    #[account(mut)]
-    pub pool_token_account_1: Account<'info, TokenAccount>,
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = token_y_mint,
+        associated_token::authority = pool,
+    )]
+    pub token_y_vault: Account<'info, TokenAccount>,
+    
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
-pub fn handler(
-    ctx: Context<InitializePool>,
-    fee_tier: u16,
-) -> Result<()> {
+pub fn handle_initialize_pool(ctx: Context<InitializePool>, bump: u8) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
-    let tick_bitmap = &mut ctx.accounts.tick_bitmap;
     
-    // Initialize pool
-    pool.token_0 = ctx.accounts.token_0.key();
-    pool.token_1 = ctx.accounts.token_1.key();
-    pool.token_account_0 = ctx.accounts.pool_token_account_0.key();
-    pool.token_account_1 = ctx.accounts.pool_token_account_1.key();
-    pool.fee_tier = fee_tier;
-    pool.sqrt_price = 0;
-    pool.liquidity = 0;
-    pool.reserve_0 = 0;
-    pool.reserve_1 = 0;
-    pool.slot_window_start = Clock::get()?.slot;
-    pool.last_slot_price = 0;
-    pool.tick_bitmap = tick_bitmap.key();
-    pool.borrowed_from_bid = 0;
-    pool.borrowed_from_ask = 0;
+    // Set up the pool state
+    pool.authority = ctx.accounts.authority.key();
+    pool.token_x_mint = ctx.accounts.token_x_mint.key();
+    pool.token_y_mint = ctx.accounts.token_y_mint.key();
+    pool.token_x_vault = ctx.accounts.token_x_vault.key();
+    pool.token_y_vault = ctx.accounts.token_y_vault.key();
+    pool.token_x_amount = 0;
+    pool.token_y_amount = 0;
+    pool.bump = bump;
     
-    // Initialize additional pool parameters
-    pool.fee_growth_global_0 = 0;
-    pool.fee_growth_global_1 = 0;
-    pool.locked_bid_liquidity = 0;
-    pool.locked_ask_liquidity = 0;
-    pool.bump = ctx.bumps.pool;
-
-    // Initialize tick bitmap with capacity
-    tick_bitmap.pool = pool.key();
-    tick_bitmap.bitmap = Vec::with_capacity(32);
-    tick_bitmap.tick_data = Vec::with_capacity(32);
-
+    // Emit the pool initialized event
+    emit!(PoolInitialized {
+        token_x_mint: ctx.accounts.token_x_mint.key(),
+        token_y_mint: ctx.accounts.token_y_mint.key(),
+        pool: ctx.accounts.pool.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+    });
+    
     Ok(())
-}
+} 
