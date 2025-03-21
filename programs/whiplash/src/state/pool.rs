@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[account]
-#[derive(Default)]
+#[derive(Default, InitSpace)]
 pub struct Pool {
     // The authority that initialized the pool
     pub authority: Pubkey,
@@ -29,16 +29,7 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub const LEN: usize = 8 + // discriminator
-                           32 + // authority
-                           32 + // token_x_mint
-                           32 + // token_y_mint
-                           32 + // token_x_vault
-                           32 + // token_y_vault
-                           8 +  // token_x_amount
-                           8 +  // token_y_amount
-                           1;   // bump
-    
+    pub const LEN: usize = 8 + Pool::INIT_SPACE;
     // Calculates the amount of token Y to receive when swapping token X
     pub fn calculate_swap_x_to_y(&self, amount_in: u64) -> Result<u64> {
         if amount_in == 0 {
