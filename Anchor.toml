@@ -5,7 +5,7 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-whiplash = "9PNrWgYx3Gh8NqQyNUkUEamwy8T2gGJLbKbD4EotTn17"
+whiplash = "GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ"
 
 [registry]
 url = "https://api.apr.dev"
