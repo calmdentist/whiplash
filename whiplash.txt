@@ -1,0 +1,35 @@
+Whiplash
+
+Whiplash makes the world's most volatile asset class, memecoins, more volatile. Degen to the power of degen. A novel AMM for unified spot and leverage trading from day zero, with zero seed capital required.
+
+How it works:
+
+Whiplash uses a modified Uniswap V2 style AMM with the invariant x * y = k. Spot trading happens just like on uniswap, maintaining the K invariant.
+
+1. Launching a coin
+
+Whiplash enables permissionless asset creation with no seed capital required for liquidity. When a coin is created, 100% of the tokens are added to the liquidity pool and the supply is fixed.
+This way, the stablecoin/SOL side of the liquidity pool can be 'virtual' (not real), since there is no way the pool can reach a state where the SOL reserves are insufficient to cover the output of a swap.
+This is because 100% of the token supply is in the liquidity pool and it is fixed, creating a zero sum game.
+
+2. Opening a leverage position
+
+When a leverage trade is made, we pretend as though we are swapping the full amount (collateral * leverage),
+and store the output tokens in a position manager (not the user's wallet). Thus, leverage trading decreases the k when a position is opened and restores it when it is closed/liquidated.
+
+3. Closing a leverage position
+
+When closing a leveraged position, we add back the 'borrowed' amount (collateral * leverage - collateral) to the appropriate reserve and swap. 
+We ensure that the output is >= borrowed amount, and deduct that from the reserve and output, the user receives the remainder (minus fees).
+
+4. Liquidation
+
+When a position cannot be closed (output < borrowed amount), it is eligible for liquidation. The liquidation price is such that swapping outputs
+the 'borrowed amount' (collateral * leverage - collateral). The liquidation is treated as a fixed price limit order and can be fulfilled by anyone 
+as long as the above conditions are met. This can be fulfilled by aggregators, arbitrageurs, etc when the price is better than the spot price.
+
+5. Limbo
+
+During periods with high volatility, a position can go underwater without being 'liquidated'. This position is now in limbo - the user cannot close it,
+but if the price goes favorably they may be able to in the future (assuming they don't get liquidated first). This protects positions from flash price changes and flashloan attacks.
+

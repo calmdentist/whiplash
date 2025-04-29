@@ -1,0 +1,310 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{tikz}
+\usepackage{xcolor}
+\geometry{letterpaper, margin=1in}
+
+\definecolor{whiplashpurple}{RGB}{128, 0, 128}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=whiplashpurple,
+    filecolor=whiplashpurple,
+    urlcolor=whiplashpurple,
+    citecolor=whiplashpurple
+}
+
+\title{\textbf{Whiplash: A Novel AMM for Unified Spot and Leverage Trading}}
+\author{calmxbt}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This whitepaper introduces \emph{Whiplash}, a novel automated market maker (AMM) designed specifically for the memecoin market. Whiplash makes an already volatile asset class even more volatile by combining spot and leverage trading within a unified liquidity framework, requiring zero seed capital for new token launches. By employing the Uniswap V2 style invariant with modifications to accommodate leveraged positions, Whiplash enables a novel trading experience while ensuring the underlying AMM remains solvent at all times. We describe the mathematical foundation, operational mechanics for launching tokens, opening and closing leveraged positions, and a robust liquidation mechanism that protects the protocol during periods of extreme volatility.
+\end{abstract}
+
+\section{Introduction}
+
+The memecoin market represents one of the most volatile sectors in the cryptocurrency space. Whiplash aims to amplify this volatility by providing a permissionless platform where traders can engage in both spot and leveraged trading from day zero, without requiring seed capital for liquidity provision. This whitepaper outlines how Whiplash modifies the traditional constant product AMM to facilitate leveraged trading while maintaining protocol solvency.
+
+\subsection{Motivation}
+Traditional AMMs, such as Uniswap, require significant seed capital to establish liquidity for new tokens. Additionally, leveraged trading typically exists in separate protocols disconnected from spot markets. Whiplash addresses both limitations by:
+\begin{itemize}
+    \item Enabling permissionless token creation without seed capital requirements
+    \item Unifying spot and leverage trading within a single liquidity pool
+    \item Ensuring protocol solvency through a novel approach to token distribution and leverage mechanics
+\end{itemize}
+
+\section{Mathematical Foundation}
+
+At the core of Whiplash is a modified Uniswap V2 style AMM with the constant product invariant:
+
+\begin{equation}
+x \cdot y = k
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $x$ represents the reserve of the base asset (stablecoin or SOL)
+    \item $y$ represents the reserve of the memecoin token
+    \item $k$ is a constant value maintained during spot trading
+\end{itemize}
+
+Unlike traditional AMMs, Whiplash introduces modifications to accommodate leveraged trading and zero seed capital token launches.
+
+\subsection{Virtual Reserves Model}
+
+For new token launches, Whiplash employs a "virtual reserves" model for the base asset side of the pool:
+
+\begin{equation}
+x_{\text{virtual}} \cdot y_{\text{real}} = k_{\text{initial}}
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $x_{\text{virtual}}$ is the virtual reserve of the base asset
+    \item $y_{\text{real}}$ is the real reserve containing 100\% of the token supply
+    \item $k_{\text{initial}}$ is the initial constant product value
+\end{itemize}
+
+This approach enables token creation without requiring real base asset liquidity, as the token supply is fixed and 100\% contained within the liquidity pool at launch.
+
+\section{Token Launch Mechanism}
+
+The token launch process in Whiplash represents a significant innovation in the AMM space:
+
+\subsection{Initial State}
+When a new memecoin token is created:
+
+\begin{equation}
+\begin{aligned}
+y_{\text{total}} &= \text{Total token supply} \\
+y_{\text{pool}} &= y_{\text{total}} \quad \text{(100\% of tokens in pool)} \\
+x_{\text{virtual}} &= \text{Initial virtual base asset reserve}
+\end{aligned}
+\end{equation}
+
+The initial constant product is established as:
+
+\begin{equation}
+k_{\text{initial}} = x_{\text{virtual}} \cdot y_{\text{pool}}
+\end{equation}
+
+\subsection{Zero Sum Game Property}
+
+A key mathematical property that enables Whiplash's innovative approach is the zero-sum nature of the token ecosystem:
+
+\begin{equation}
+\forall t: y_{\text{pool},t} + y_{\text{users},t} = y_{\text{total}}
+\end{equation}
+
+where $t$ represents any point in time after launch. This invariant ensures that the sum of tokens in the pool and in user wallets always equals the total supply, creating a closed system.
+
+This property guarantees that the virtual reserves model remains solvent because there can never be a scenario where more tokens are demanded from the pool than exist in total circulation.
+
+\section{Leverage Trading Mechanism}
+
+Whiplash introduces a novel approach to leverage trading that modifies the constant product invariant temporarily while positions are open.
+
+\subsection{Opening a Leveraged Position}
+
+When a trader opens a leveraged position with leverage factor $L$:
+
+\begin{equation}
+\begin{aligned}
+\text{Collateral} &= c \\
+\text{Effective trade size} &= c \cdot L \\
+\text{Borrowed amount} &= c \cdot (L - 1)
+\end{aligned}
+\end{equation}
+
+The leverage trade is executed as if it were a spot trade with size $c \cdot L$, but the output tokens are stored in a position manager rather than sent to the user's wallet:
+
+\begin{equation}
+\begin{aligned}
+\Delta y &= \frac{y \cdot c \cdot L}{x + c \cdot L} \\
+y_{\text{position}} &= \Delta y
+\end{aligned}
+\end{equation}
+
+This operation modifies the constant product value to:
+
+\begin{equation}
+k_{\text{after\_leverage}} = (x + c) \cdot (y - \Delta y) < k_{\text{initial}}
+\end{equation}
+
+This reduction in $k$ is temporary and will be restored when the position is closed or liquidated.
+
+\subsection{Mathematical Impact on Reserves}
+
+For a long position on the token, the pre and post reserves can be expressed as:
+
+\begin{equation}
+\begin{aligned}
+\text{Pre-trade:} \quad &x \cdot y = k \\
+\text{Post-trade:} \quad &(x + c) \cdot (y - \Delta y) = k_{\text{after\_leverage}} < k
+\end{aligned}
+\end{equation}
+
+The difference between the original $k$ and the reduced $k_{\text{after\_leverage}}$ represents the "borrowed" portion that must be repaid when the position is closed.
+
+\section{Closing a Leveraged Position}
+
+When a trader closes a leveraged position, the protocol must ensure that the borrowed amount is repaid and the constant product $k$ is restored.
+
+\subsection{Successful Position Closure}
+
+For a successful closure of a leverage position, the following conditions must be satisfied:
+
+\begin{equation}
+\begin{aligned}
+\text{Swapped output} &= \frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} \\
+\text{Borrowed amount} &= c \cdot (L - 1) \\
+\text{Condition:} \quad &\text{Swapped output} \geq \text{Borrowed amount}
+\end{aligned}
+\end{equation}
+
+When closing the position, the protocol:
+\begin{enumerate}
+    \item Swaps the position tokens back to the base asset
+    \item Deducts the borrowed amount from the output
+    \item Returns the remainder to the user
+    \item Restores the constant product $k$ to its original value
+\end{enumerate}
+
+The mathematical representation of this process:
+
+\begin{equation}
+\begin{aligned}
+\text{Output} &= \frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} \\
+\text{User receives} &= \text{Output} - c \cdot (L - 1) - \text{fees} \\
+\text{Post-closure:} \quad &x_{\text{new}} \cdot y_{\text{new}} = k
+\end{aligned}
+\end{equation}
+
+\section{Liquidation Mechanism}
+
+The liquidation mechanism in Whiplash is designed to protect the protocol when leveraged positions become underwater.
+
+\subsection{Liquidation Condition}
+
+A position becomes eligible for liquidation when:
+
+\begin{equation}
+\frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} < c \cdot (L - 1)
+\end{equation}
+
+This indicates that the position can no longer be closed profitably as the output would be less than the borrowed amount.
+
+\subsection{Liquidation Price}
+
+The liquidation price is the price at which swapping the position tokens outputs exactly the borrowed amount:
+
+\begin{equation}
+P_{\text{liquidation}} = \frac{c \cdot (L - 1)}{y_{\text{position}}}
+\end{equation}
+
+This price represents the boundary between a position that can be closed and one that requires liquidation.
+
+\subsection{Liquidation Execution}
+
+The liquidation process can be modeled as a fixed price limit order:
+
+\begin{equation}
+\begin{aligned}
+\text{Required base asset} &= c \cdot (L - 1) \\
+\text{Liquidated tokens} &= y_{\text{position}} \\
+\text{Liquidation price} &= \frac{\text{Required base asset}}{\text{Liquidated tokens}}
+\end{aligned}
+\end{equation}
+
+Liquidations can be performed by any market participant when the AMM price crosses the liquidation price, creating arbitrage opportunities.
+When a position is liquidated, the SOL obtained from the liquidation is added back to the $x$ reserve, thereby restoring the constant product $k$ to its original value.
+
+\section{Limbo State}
+
+A unique feature of Whiplash is the "limbo state" for positions that experience extreme price movements.
+
+\subsection{Mathematical Definition of Limbo}
+
+A position enters limbo when:
+
+\begin{equation}
+\begin{aligned}
+&\frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} < c \cdot (L - 1) \\
+&\text{and no liquidator has fulfilled the liquidation}
+\end{aligned}
+\end{equation}
+
+\subsection{Exiting Limbo}
+
+A position can exit limbo if price movements cause the following condition to be met:
+
+\begin{equation}
+\frac{x_{\text{new}} \cdot y_{\text{position}}}{y_{\text{new}} + y_{\text{position}}} \geq c \cdot (L - 1)
+\end{equation}
+
+This mathematical condition allows for positions to recover from temporary price shocks rather than being forced into immediate liquidation, providing protection against flash crashes and manipulation.
+
+\section{System Properties and Guarantees}
+
+Whiplash's design provides several important mathematical guarantees:
+
+\subsection{Solvency Guarantee}
+
+The solvency of the protocol is guaranteed by the zero-sum nature of the token supply and the constant product invariant:
+
+\begin{equation}
+\forall t: y_{\text{pool},t} + y_{\text{users},t} + \sum_{i} y_{\text{position},i,t} = y_{\text{total}}
+\end{equation}
+
+where $y_{\text{position},i,t}$ represents the tokens in the $i$-th leveraged position at time $t$.
+
+\subsection{No Seed Capital Requirement}
+
+The virtual reserves model eliminates the need for seed capital by ensuring:
+
+\begin{equation}
+\forall t: x_{\text{required},t} \leq \sum_{j} \text{deposits}_j
+\end{equation}
+
+where $\text{deposits}_j$ represents the base asset deposited by the $j$-th user for either spot or leverage trading.
+
+\subsection{Zero Bad Debt Guarantee}
+
+The protocol guarantees zero bad debt through its liquidation and limbo mechanisms:
+
+\begin{equation}
+\forall \text{ positions } i: \text{either } \begin{cases}
+\text{position is healthy} \\
+\text{position is liquidatable} \\
+\text{position is in limbo}
+\end{cases}
+\end{equation}
+
+Under no circumstances can a position create a debt that the protocol cannot recover, as the fixed token supply ensures all positions are backed by real tokens.
+
+\section{Conclusion}
+
+Whiplash represents a paradigm shift in AMM design by enabling permissionless token launches with zero seed capital and unifying spot and leverage trading within a single framework. The mathematical foundation ensures that:
+
+\begin{enumerate}
+    \item New tokens can be launched without requiring liquidity providers
+    \item Leverage trading can amplify the inherent volatility of memecoins
+    \item The protocol remains solvent at all times through its novel approach to reserve management
+    \item Traders are protected from flash crashes through the limbo mechanism
+\end{enumerate}
+
+By building on proven AMM mechanics while introducing innovative modifications, Whiplash creates a platform that makes "the world's most volatile asset class more volatile," providing a truly novel trading experience for memecoin enthusiasts.
+
+\end{document} 
