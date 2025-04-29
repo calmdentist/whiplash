@@ -6,20 +6,14 @@ pub struct Pool {
     // The authority that initialized the pool
     pub authority: Pubkey,
     
-    // Token X mint address
-    pub token_x_mint: Pubkey,
-    
-    // Token Y mint address
+    // Token Y mint address (memecoin)
     pub token_y_mint: Pubkey,
-    
-    // Token X vault (holds the token X reserves)
-    pub token_x_vault: Pubkey,
     
     // Token Y vault (holds the token Y reserves)
     pub token_y_vault: Pubkey,
     
-    // Token X reserves (amount held in the vault)
-    pub token_x_amount: u64,
+    // Virtual SOL reserve (x * y = k)
+    pub virtual_sol_reserve: u64,
     
     // Token Y reserves (amount held in the vault)
     pub token_y_amount: u64,
@@ -30,23 +24,23 @@ pub struct Pool {
 
 impl Pool {
     pub const LEN: usize = 8 + Pool::INIT_SPACE;
-    // Calculates the amount of token Y to receive when swapping token X
-    pub fn calculate_swap_x_to_y(&self, amount_in: u64) -> Result<u64> {
+    // Calculates the amount of token Y to receive when swapping SOL
+    pub fn calculate_swap_sol_to_y(&self, amount_in: u64) -> Result<u64> {
         if amount_in == 0 {
             return Err(error!(crate::WhiplashError::ZeroSwapAmount));
         }
         
-        if self.token_x_amount == 0 || self.token_y_amount == 0 {
+        if self.virtual_sol_reserve == 0 || self.token_y_amount == 0 {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
         
         // x * y = k formula
         // Calculate the new reserves
-        let x_reserve_after = self.token_x_amount.checked_add(amount_in)
+        let x_reserve_after = self.virtual_sol_reserve.checked_add(amount_in)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         // k = x * y
-        let k = self.token_x_amount.checked_mul(self.token_y_amount)
+        let k = self.virtual_sol_reserve.checked_mul(self.token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         // k / x_after = y_after
@@ -60,13 +54,13 @@ impl Pool {
         Ok(amount_out)
     }
     
-    // Calculates the amount of token X to receive when swapping token Y
-    pub fn calculate_swap_y_to_x(&self, amount_in: u64) -> Result<u64> {
+    // Calculates the amount of SOL to receive when swapping token Y
+    pub fn calculate_swap_y_to_sol(&self, amount_in: u64) -> Result<u64> {
         if amount_in == 0 {
             return Err(error!(crate::WhiplashError::ZeroSwapAmount));
         }
         
-        if self.token_x_amount == 0 || self.token_y_amount == 0 {
+        if self.virtual_sol_reserve == 0 || self.token_y_amount == 0 {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
         
@@ -76,7 +70,7 @@ impl Pool {
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         // k = x * y
-        let k = self.token_x_amount.checked_mul(self.token_y_amount)
+        let k = self.virtual_sol_reserve.checked_mul(self.token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         // k / y_after = x_after
@@ -84,7 +78,7 @@ impl Pool {
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         // Amount out = x_reserve_before - x_reserve_after
-        let amount_out = self.token_x_amount.checked_sub(x_reserve_after)
+        let amount_out = self.virtual_sol_reserve.checked_sub(x_reserve_after)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         Ok(amount_out)

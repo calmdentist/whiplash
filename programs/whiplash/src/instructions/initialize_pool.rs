@@ -6,12 +6,10 @@ use anchor_spl::{
 use crate::{state::*, events::*};
 
 #[derive(Accounts)]
-#[instruction(bump: u8)]
-pub struct InitializePool<'info> {
+#[instruction(bump: u8, initial_virtual_sol: u64)]
+pub struct Launch<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    
-    pub token_x_mint: Account<'info, Mint>,
     
     pub token_y_mint: Account<'info, Mint>,
     
@@ -19,7 +17,6 @@ pub struct InitializePool<'info> {
         init,
         seeds = [
             b"pool".as_ref(),
-            token_x_mint.key().as_ref(),
             token_y_mint.key().as_ref(),
         ],
         bump,
@@ -27,14 +24,6 @@ pub struct InitializePool<'info> {
         space = Pool::LEN
     )]
     pub pool: Account<'info, Pool>,
-    
-    #[account(
-        init,
-        payer = authority,
-        associated_token::mint = token_x_mint,
-        associated_token::authority = pool,
-    )]
-    pub token_x_vault: Account<'info, TokenAccount>,
     
     #[account(
         init,
@@ -50,24 +39,22 @@ pub struct InitializePool<'info> {
     pub rent: Sysvar<'info, Rent>,
 }
 
-pub fn handle_initialize_pool(ctx: Context<InitializePool>, bump: u8) -> Result<()> {
+pub fn handle_launch(ctx: Context<Launch>, bump: u8, initial_virtual_sol: u64) -> Result<()> {
     let pool = &mut ctx.accounts.pool;
     
     // Set up the pool state
     pool.authority = ctx.accounts.authority.key();
-    pool.token_x_mint = ctx.accounts.token_x_mint.key();
     pool.token_y_mint = ctx.accounts.token_y_mint.key();
-    pool.token_x_vault = ctx.accounts.token_x_vault.key();
     pool.token_y_vault = ctx.accounts.token_y_vault.key();
-    pool.token_x_amount = 0;
+    pool.virtual_sol_reserve = initial_virtual_sol;
     pool.token_y_amount = 0;
     pool.bump = bump;
     
-    // Emit the pool initialized event
-    emit!(PoolInitialized {
-        token_x_mint: ctx.accounts.token_x_mint.key(),
+    // Emit the pool launched event
+    emit!(PoolLaunched {
         token_y_mint: ctx.accounts.token_y_mint.key(),
         pool: ctx.accounts.pool.key(),
+        initial_virtual_sol,
         timestamp: Clock::get()?.unix_timestamp,
     });
     
