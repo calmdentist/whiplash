@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
 #[event]
-pub struct PoolLaunched {
+pub struct PoolInitialized {
+    pub token_x_mint: Pubkey,
     pub token_y_mint: Pubkey,
     pub pool: Pubkey,
-    pub initial_virtual_sol: u64,
     pub timestamp: i64,
 }
 
@@ -34,14 +34,5 @@ pub struct LiquidityRemoved {
     pub pool: Pubkey,
     pub amount_x: u64,
     pub amount_y: u64,
-    pub timestamp: i64,
-}
-
-#[event]
-pub struct PositionLiquidated {
-    pub position: Pubkey,
-    pub pool: Pubkey,
-    pub liquidator: Pubkey,
-    pub position_size: u64,
     pub timestamp: i64,
 } 

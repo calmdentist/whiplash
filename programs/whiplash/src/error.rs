@@ -31,10 +31,4 @@ pub enum WhiplashError {
     
     #[msg("Unauthorized operation")]
     Unauthorized,
-
-    #[msg("Invalid position")]
-    InvalidPosition,
-
-    #[msg("Position not liquidatable")]
-    PositionNotLiquidatable,
 } 

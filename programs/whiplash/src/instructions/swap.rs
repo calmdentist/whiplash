@@ -11,11 +11,20 @@ pub struct Swap<'info> {
         mut,
         seeds = [
             b"pool".as_ref(),
+            pool.token_x_mint.as_ref(),
             pool.token_y_mint.as_ref(),
         ],
         bump = pool.bump,
     )]
     pub pool: Account<'info, Pool>,
+    
+    #[account(
+        mut,
+        constraint = token_x_vault.key() == pool.token_x_vault @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_x_vault.mint == pool.token_x_mint @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_x_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+    )]
+    pub token_x_vault: Account<'info, TokenAccount>,
     
     #[account(
         mut,
@@ -38,7 +47,6 @@ pub struct Swap<'info> {
     pub user_token_out: Account<'info, TokenAccount>,
     
     pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
 }
 
 pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
@@ -47,11 +55,11 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
     
-    // Check if token in is SOL or Y
-    let is_sol_to_y = ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_y_mint;
+    // Check if token in is X or Y
+    let is_x_to_y = ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_x_mint;
     
     // Validate token accounts
-    if is_sol_to_y {
+    if is_x_to_y {
         require!(
             ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_y_mint,
             WhiplashError::InvalidTokenAccounts
@@ -62,16 +70,16 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             WhiplashError::InvalidTokenAccounts
         );
         require!(
-            ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_y_mint,
+            ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_x_mint,
             WhiplashError::InvalidTokenAccounts
         );
     }
     
     // Calculate the output amount based on the constant product formula
-    let amount_out = if is_sol_to_y {
-        ctx.accounts.pool.calculate_swap_sol_to_y(amount_in)?
+    let amount_out = if is_x_to_y {
+        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
     } else {
-        ctx.accounts.pool.calculate_swap_y_to_sol(amount_in)?
+        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
     };
     
     // Check minimum output amount
@@ -83,8 +91,8 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     // Transfer token from user to vault
     let cpi_accounts_in = Transfer {
         from: ctx.accounts.user_token_in.to_account_info(),
-        to: if is_sol_to_y {
-            ctx.accounts.token_y_vault.to_account_info()
+        to: if is_x_to_y {
+            ctx.accounts.token_x_vault.to_account_info()
         } else {
             ctx.accounts.token_y_vault.to_account_info()
         },
@@ -97,16 +105,17 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     // Transfer token from vault to user
     let pool_signer_seeds = &[
         b"pool".as_ref(),
+        ctx.accounts.pool.token_x_mint.as_ref(),
         ctx.accounts.pool.token_y_mint.as_ref(),
         &[ctx.accounts.pool.bump],
     ];
     let pool_signer = &[&pool_signer_seeds[..]];
     
     let cpi_accounts_out = Transfer {
-        from: if is_sol_to_y {
+        from: if is_x_to_y {
             ctx.accounts.token_y_vault.to_account_info()
         } else {
-            ctx.accounts.token_y_vault.to_account_info()
+            ctx.accounts.token_x_vault.to_account_info()
         },
         to: ctx.accounts.user_token_out.to_account_info(),
         authority: ctx.accounts.pool.to_account_info(),
@@ -116,15 +125,15 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     
     // Update pool reserves
     let pool = &mut ctx.accounts.pool;
-    if is_sol_to_y {
-        pool.virtual_sol_reserve = pool.virtual_sol_reserve.checked_add(amount_in)
+    if is_x_to_y {
+        pool.token_x_amount = pool.token_x_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
         pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.virtual_sol_reserve = pool.virtual_sol_reserve.checked_sub(amount_out)
+        pool.token_x_amount = pool.token_x_amount.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     }
     

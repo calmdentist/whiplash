@@ -16,8 +16,8 @@ declare_id!("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
 pub mod whiplash {
     use super::*;
 
-    pub fn launch(ctx: Context<Launch>, bump: u8, initial_virtual_sol: u64) -> Result<()> {
-        instructions::initialize_pool::handle_launch(ctx, bump, initial_virtual_sol)
+    pub fn initialize_pool(ctx: Context<InitializePool>, bump: u8) -> Result<()> {
+        instructions::initialize_pool::handle_initialize_pool(ctx, bump)
     }
 
     pub fn add_liquidity(
@@ -38,9 +38,5 @@ pub mod whiplash {
 
     pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
         instructions::swap::handle_swap(ctx, amount_in, min_amount_out)
-    }
-
-    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
-        instructions::liquidate::handle_liquidate(ctx)
     }
 }
