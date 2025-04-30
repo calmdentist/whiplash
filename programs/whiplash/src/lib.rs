@@ -38,4 +38,8 @@ pub mod whiplash {
     ) -> Result<()> {
         instructions::leverage_swap::handle_leverage_swap(ctx, amount_in, min_amount_out, leverage)
     }
+    
+    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+        instructions::liquidate::handle_liquidate(ctx)
+    }
 }

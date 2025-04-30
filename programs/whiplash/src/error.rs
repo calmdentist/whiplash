@@ -37,4 +37,10 @@ pub enum WhiplashError {
     
     #[msg("Failed to change token authority")]
     AuthorityChangeFailed,
+    
+    #[msg("Position cannot be liquidated")]
+    PositionNotLiquidatable,
+    
+    #[msg("Invalid position")]
+    InvalidPosition,
 } 

@@ -165,14 +165,6 @@ pub fn handle_leverage_swap(
             cpi_accounts_in,
         );
         token::transfer(cpi_ctx_in, amount_in)?;
-
-        // Transfer SOL from pool to position token account
-        let pool_signer_seeds = &[
-            b"pool".as_ref(),
-            ctx.accounts.pool.token_y_mint.as_ref(),
-            &[ctx.accounts.pool.bump],
-        ];
-        let pool_signer = &[&pool_signer_seeds[..]];
         
         // For a short position, we're transferring SOL to the position
         // Make sure the position_token_account is used as the destination

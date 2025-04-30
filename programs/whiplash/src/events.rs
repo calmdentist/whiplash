@@ -49,13 +49,12 @@ pub struct PositionClosed {
 #[event]
 pub struct PositionLiquidated {
     pub liquidator: Pubkey,
-    pub user: Pubkey,
+    pub position_owner: Pubkey,
     pub pool: Pubkey,
     pub position: Pubkey,
-    pub is_long: bool,
-    pub collateral: u64,
-    pub leverage: u8,
-    pub size: u64,
-    pub liquidation_price: u128,
+    pub position_size: u64,
+    pub borrowed_amount: u64,
+    pub expected_output: u64,
+    pub liquidator_reward: u64,
     pub timestamp: i64,
 } 
