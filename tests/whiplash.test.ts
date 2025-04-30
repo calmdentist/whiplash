@@ -612,6 +612,21 @@ describe("whiplash", () => {
       const finalUserSolBalance = await provider.connection.getBalance(shortPositionUser.publicKey);
       console.log("Position SOL amount:", positionAccount.size.toNumber());
       console.log("Final user SOL balance:", finalUserSolBalance);
+      
+      // Upon examining the implementation in leverage_swap.rs, for short positions:
+      // 1. The code records the size in the position account
+      // 2. The SOL is transferred directly to the user's wallet, not to position_token_account
+      
+      // Verify the transaction succeeded and the position was created with correct values
+      // Instead of checking exact SOL balances (which can vary due to fees), 
+      // we trust that the position.size field correctly represents the SOL amount
+      // that should have been sent to the user
+      expect(positionAccount.size.toNumber()).to.be.at.least(minOutputAmount);
+      expect(positionAccount.isLong).to.be.false;
+      
+      // Verify the position account has the correct values
+      expect(positionAccount.collateral.toNumber()).to.equal(TOKEN_SWAP_AMOUNT);
+      expect(positionAccount.leverage).to.equal(LEVERAGE);
     } catch (error) {
       console.error("Leverage Swap Token->SOL Error:", error);
       throw error;
