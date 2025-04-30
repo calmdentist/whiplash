@@ -46,21 +46,33 @@ impl Pool {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
         
-        // x * y = k formula with virtual reserves
-        // Calculate the new reserves
+        // Instead of k = x * y, we'll use (y_new/y) = (x/x_new) to avoid overflow
+        // Calculate the new x after swap
         let x_reserve_after = total_x.checked_add(amount_in)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-            
-        // k = (x + virtual_x) * (y + virtual_y)
-        let k = total_x.checked_mul(total_y)
+        
+        // Calculate the ratio of x_before / x_after
+        // Using (total_y * total_x) / x_reserve_after = y_reserve_after
+        // where total_x / x_reserve_after is the scaling factor
+        
+        // Using u128 for intermediate calculations to avoid overflow
+        let x_before: u128 = total_x as u128;
+        let x_after: u128 = x_reserve_after as u128;
+        let y_before: u128 = total_y as u128;
+        
+        // Calculate new y reserves ensuring no overflow: y_after = (x_before * y_before) / x_after
+        let y_reserve_after = (x_before.checked_mul(y_before)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?)
+            .checked_div(x_after)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
-        // k / x_after = y_after
-        let y_reserve_after = k.checked_div(x_reserve_after)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-            
+        // Ensure the result fits in u64
+        if y_reserve_after > u64::MAX as u128 {
+            return Err(error!(crate::WhiplashError::MathOverflow));
+        }
+        
         // Amount out = y_reserve_before - y_reserve_after
-        let amount_out = total_y.checked_sub(y_reserve_after)
+        let amount_out = total_y.checked_sub(y_reserve_after as u64)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         Ok(amount_out)
@@ -82,21 +94,28 @@ impl Pool {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
         
-        // x * y = k formula with virtual reserves
-        // Calculate the new reserves
+        // Using the same pattern as in calculate_swap_x_to_y but for y->x swap
         let y_reserve_after = total_y.checked_add(amount_in)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-            
-        // k = (x + virtual_x) * (y + virtual_y)
-        let k = total_x.checked_mul(total_y)
+        
+        // Using u128 for intermediate calculations to avoid overflow
+        let x_before: u128 = total_x as u128;
+        let y_before: u128 = total_y as u128;
+        let y_after: u128 = y_reserve_after as u128;
+        
+        // Calculate new x reserves ensuring no overflow: x_after = (x_before * y_before) / y_after
+        let x_reserve_after = (x_before.checked_mul(y_before)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?)
+            .checked_div(y_after)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
-        // k / y_after = x_after
-        let x_reserve_after = k.checked_div(y_reserve_after)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-            
+        // Ensure the result fits in u64
+        if x_reserve_after > u64::MAX as u128 {
+            return Err(error!(crate::WhiplashError::MathOverflow));
+        }
+        
         // Amount out = x_reserve_before - x_reserve_after
-        let amount_out = total_x.checked_sub(x_reserve_after)
+        let amount_out = total_x.checked_sub(x_reserve_after as u64)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         Ok(amount_out)

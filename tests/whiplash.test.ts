@@ -208,6 +208,7 @@ describe("whiplash", () => {
       // Verify pool state
       const finalPoolAccount = await program.account.pool.fetch(poolPda);
       const finalPoolTokenAmount = finalPoolAccount.tokenYAmount.toNumber();
+      const finalPoolLamports = finalPoolAccount.lamports.toNumber();
       const finalVirtualSolAmount = finalPoolAccount.virtualSolAmount.toNumber();
 
       // Check user tokens changed correctly
@@ -216,11 +217,21 @@ describe("whiplash", () => {
 
       // Check pool reserves changed correctly
       expect(finalPoolTokenAmount).to.equal(initialPoolTokenAmount - (finalTokenBalance - initialTokenBalance));
-      expect(finalVirtualSolAmount).to.equal(initialVirtualSolAmount + SWAP_AMOUNT);
+      // In a SOL->Token swap, the SOL goes to the pool's lamports, not virtual amount
+      expect(finalPoolLamports).to.equal(SWAP_AMOUNT);
+      // Virtual SOL amount should remain unchanged
+      expect(finalVirtualSolAmount).to.equal(initialVirtualSolAmount);
 
       // Verify constant product formula is maintained (with small rounding difference allowed)
-      const initialK = initialVirtualSolAmount * initialPoolTokenAmount;
-      const finalK = finalVirtualSolAmount * finalPoolTokenAmount;
+      // Use total reserves (real + virtual) for the constant product check
+      const initialTotalSol = initialVirtualSolAmount; // Initially no real SOL
+      const initialTotalTokens = initialPoolTokenAmount;
+      
+      const finalTotalSol = finalVirtualSolAmount + finalPoolLamports;
+      const finalTotalTokens = finalPoolTokenAmount;
+      
+      const initialK = initialTotalSol * initialTotalTokens;
+      const finalK = finalTotalSol * finalTotalTokens;
       
       // Allow for very small rounding differences
       const kDiffRatio = Math.abs(finalK - initialK) / initialK;
