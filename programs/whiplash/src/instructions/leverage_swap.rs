@@ -14,20 +14,11 @@ pub struct LeverageSwap<'info> {
         mut,
         seeds = [
             b"pool".as_ref(),
-            pool.token_x_mint.as_ref(),
             pool.token_y_mint.as_ref(),
         ],
         bump = pool.bump,
     )]
     pub pool: Account<'info, Pool>,
-    
-    #[account(
-        mut,
-        constraint = token_x_vault.key() == pool.token_x_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_x_vault.mint == pool.token_x_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_x_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub token_x_vault: Account<'info, TokenAccount>,
     
     #[account(
         mut,
@@ -62,7 +53,6 @@ pub struct LeverageSwap<'info> {
     )]
     pub position: Account<'info, Position>,
     
-    
     #[account(
         init_if_needed,
         payer = user,
@@ -90,11 +80,11 @@ pub fn handle_leverage_swap(
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
     
-    // Check if token in is X or Y
-    let is_x_to_y = ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_x_mint;
+    // Check if token in is SOL or Y
+    let is_sol_to_y = ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_y_mint;
     
     // Validate token accounts
-    if is_x_to_y {
+    if is_sol_to_y {
         require!(
             ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_y_mint,
             WhiplashError::InvalidTokenAccounts
@@ -104,14 +94,10 @@ pub fn handle_leverage_swap(
             ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_y_mint,
             WhiplashError::InvalidTokenAccounts
         );
-        require!(
-            ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_x_mint,
-            WhiplashError::InvalidTokenAccounts
-        );
     }
     
     // Calculate the output amount based on the constant product formula
-    let amount_out = if is_x_to_y {
+    let amount_out = if is_sol_to_y {
         ctx.accounts.pool.calculate_swap_x_to_y(amount_in * leverage as u64 / 10)?
     } else {
         ctx.accounts.pool.calculate_swap_y_to_x(amount_in * leverage as u64 / 10)?
@@ -123,47 +109,83 @@ pub fn handle_leverage_swap(
         WhiplashError::SlippageToleranceExceeded
     );
     
-    // Transfer token from user to vault
-    let cpi_accounts_in = Transfer {
-        from: ctx.accounts.user_token_in.to_account_info(),
-        to: if is_x_to_y {
-            ctx.accounts.token_x_vault.to_account_info()
-        } else {
-            ctx.accounts.token_y_vault.to_account_info()
-        },
-        authority: ctx.accounts.user.to_account_info(),
-    };
-    let cpi_program = ctx.accounts.token_program.to_account_info();
-    let cpi_ctx_in = CpiContext::new(cpi_program.clone(), cpi_accounts_in);
-    token::transfer(cpi_ctx_in, amount_in)?;
-    
-    // Transfer token from vault to position token account
-    let pool_signer_seeds = &[
-        b"pool".as_ref(),
-        ctx.accounts.pool.token_x_mint.as_ref(),
-        ctx.accounts.pool.token_y_mint.as_ref(),
-        &[ctx.accounts.pool.bump],
-    ];
-    let pool_signer = &[&pool_signer_seeds[..]];
-    
-    let cpi_accounts_out = Transfer {
-        from: if is_x_to_y {
-            ctx.accounts.token_y_vault.to_account_info()
-        } else {
-            ctx.accounts.token_x_vault.to_account_info()
-        },
-        to: ctx.accounts.position_token_account.to_account_info(),
-        authority: ctx.accounts.pool.to_account_info(),
-    };
-    let cpi_ctx_out = CpiContext::new_with_signer(cpi_program, cpi_accounts_out, pool_signer);
-    token::transfer(cpi_ctx_out, amount_out)?;
+    // Handle token transfers
+    if is_sol_to_y {
+        // Transfer SOL from user to pool
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.user.key(),
+            &ctx.accounts.pool.key(),
+            amount_in,
+        );
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                ctx.accounts.user.to_account_info(),
+                ctx.accounts.pool.to_account_info(),
+            ],
+        )?;
+
+        // Transfer token Y from vault to position token account
+        let pool_signer_seeds = &[
+            b"pool".as_ref(),
+            ctx.accounts.pool.token_y_mint.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+        let pool_signer = &[&pool_signer_seeds[..]];
+        
+        let cpi_accounts_out = Transfer {
+            from: ctx.accounts.token_y_vault.to_account_info(),
+            to: ctx.accounts.position_token_account.to_account_info(),
+            authority: ctx.accounts.pool.to_account_info(),
+        };
+        let cpi_ctx_out = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts_out,
+            pool_signer,
+        );
+        token::transfer(cpi_ctx_out, amount_out)?;
+    } else {
+        // Transfer token Y from user to vault
+        let cpi_accounts_in = Transfer {
+            from: ctx.accounts.user_token_in.to_account_info(),
+            to: ctx.accounts.token_y_vault.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        };
+        let cpi_ctx_in = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts_in,
+        );
+        token::transfer(cpi_ctx_in, amount_in)?;
+
+        // Transfer SOL from pool to position token account
+        let pool_signer_seeds = &[
+            b"pool".as_ref(),
+            ctx.accounts.pool.token_y_mint.as_ref(),
+            &[ctx.accounts.pool.bump],
+        ];
+        let pool_signer = &[&pool_signer_seeds[..]];
+        
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &ctx.accounts.pool.key(),
+            &ctx.accounts.position_token_account.key(),
+            amount_out,
+        );
+        anchor_lang::solana_program::program::invoke_signed(
+            &ix,
+            &[
+                ctx.accounts.pool.to_account_info(),
+                ctx.accounts.position_token_account.to_account_info(),
+            ],
+            pool_signer,
+        )?;
+    }
     
     // Initialize position data
     let position = &mut ctx.accounts.position;
     position.authority = ctx.accounts.user.key();
     position.pool = ctx.accounts.pool.key();
     position.position_vault = ctx.accounts.position_token_account.key();
-    position.is_long = is_x_to_y; // long if X to Y, short if Y to X
+    position.is_long = is_sol_to_y; // long if SOL to Y, short if Y to SOL
     position.collateral = amount_in;
     position.leverage = leverage;
     position.size = amount_out;
@@ -174,15 +196,15 @@ pub fn handle_leverage_swap(
     
     // Update pool reserves
     let pool = &mut ctx.accounts.pool;
-    if is_x_to_y {
-        pool.token_x_amount = pool.token_x_amount.checked_add(amount_in)
+    if is_sol_to_y {
+        pool.lamports = pool.lamports.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
         pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.token_x_amount = pool.token_x_amount.checked_sub(amount_out)
+        pool.lamports = pool.lamports.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     }
     

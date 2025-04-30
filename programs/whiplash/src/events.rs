@@ -1,19 +1,10 @@
 use anchor_lang::prelude::*;
 
 #[event]
-pub struct PoolInitialized {
-    pub token_x_mint: Pubkey,
-    pub token_y_mint: Pubkey,
+pub struct PoolLaunched {
+    pub token_mint: Pubkey,
     pub pool: Pubkey,
-    pub timestamp: i64,
-}
-
-#[event]
-pub struct LiquidityAdded {
-    pub provider: Pubkey,
-    pub pool: Pubkey,
-    pub amount_x: u64,
-    pub amount_y: u64,
+    pub virtual_sol_reserve: u64,
     pub timestamp: i64,
 }
 
@@ -29,10 +20,42 @@ pub struct Swapped {
 }
 
 #[event]
-pub struct LiquidityRemoved {
-    pub provider: Pubkey,
+pub struct PositionOpened {
+    pub user: Pubkey,
     pub pool: Pubkey,
-    pub amount_x: u64,
-    pub amount_y: u64,
+    pub position: Pubkey,
+    pub is_long: bool,
+    pub collateral: u64,
+    pub leverage: u8,
+    pub size: u64,
+    pub entry_price: u128,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct PositionClosed {
+    pub user: Pubkey,
+    pub pool: Pubkey,
+    pub position: Pubkey,
+    pub is_long: bool,
+    pub collateral: u64,
+    pub leverage: u8,
+    pub size: u64,
+    pub exit_price: u128,
+    pub pnl: i64,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct PositionLiquidated {
+    pub liquidator: Pubkey,
+    pub user: Pubkey,
+    pub pool: Pubkey,
+    pub position: Pubkey,
+    pub is_long: bool,
+    pub collateral: u64,
+    pub leverage: u8,
+    pub size: u64,
+    pub liquidation_price: u128,
     pub timestamp: i64,
 } 

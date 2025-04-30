@@ -16,27 +16,26 @@ declare_id!("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
 pub mod whiplash {
     use super::*;
 
-    pub fn initialize_pool(ctx: Context<InitializePool>, bump: u8) -> Result<()> {
-        instructions::initialize_pool::handle_initialize_pool(ctx, bump)
-    }
-
-    pub fn add_liquidity(
-        ctx: Context<AddLiquidity>, 
-        amount_x_desired: u64, 
-        amount_y_desired: u64, 
-        amount_x_min: u64, 
-        amount_y_min: u64
+    pub fn launch(
+        ctx: Context<Launch>, 
+        virtual_sol_reserve: u64,
+        token_name: String,
+        token_ticker: String,
+        metadata_uri: String,
     ) -> Result<()> {
-        instructions::add_liquidity::handle_add_liquidity(
-            ctx, 
-            amount_x_desired, 
-            amount_y_desired, 
-            amount_x_min, 
-            amount_y_min
-        )
+        instructions::launch::handle_launch(ctx, virtual_sol_reserve, token_name, token_ticker, metadata_uri)
     }
 
     pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
         instructions::swap::handle_swap(ctx, amount_in, min_amount_out)
+    }
+
+    pub fn leverage_swap(
+        ctx: Context<LeverageSwap>,
+        amount_in: u64,
+        min_amount_out: u64,
+        leverage: u8,
+    ) -> Result<()> {
+        instructions::leverage_swap::handle_leverage_swap(ctx, amount_in, min_amount_out, leverage)
     }
 }

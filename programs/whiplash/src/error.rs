@@ -31,4 +31,10 @@ pub enum WhiplashError {
     
     #[msg("Unauthorized operation")]
     Unauthorized,
+    
+    #[msg("Failed to create metadata account")]
+    MetadataCreationFailed,
+    
+    #[msg("Failed to change token authority")]
+    AuthorityChangeFailed,
 } 
