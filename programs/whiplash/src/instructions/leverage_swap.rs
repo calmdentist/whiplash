@@ -28,17 +28,13 @@ pub struct LeverageSwap<'info> {
     )]
     pub token_y_vault: Account<'info, TokenAccount>,
     
-    #[account(
-        mut,
-        constraint = user_token_in.owner == user.key() @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub user_token_in: Account<'info, TokenAccount>,
+    /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
+    #[account(mut)]
+    pub user_token_in: UncheckedAccount<'info>,
     
-    #[account(
-        mut,
-        constraint = user_token_out.owner == user.key() @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub user_token_out: Account<'info, TokenAccount>,
+    /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
+    #[account(mut)]
+    pub user_token_out: UncheckedAccount<'info>,
 
     #[account(
         init_if_needed,
@@ -80,18 +76,31 @@ pub fn handle_leverage_swap(
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
     
-    // Check if token in is SOL or Y
-    let is_sol_to_y = ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_y_mint;
+    // Check if token in is SOL based on the owner of the account
+    // If the owner is the System Program, it's a native SOL account
+    let is_sol_to_y = ctx.accounts.user_token_in.owner == &anchor_lang::solana_program::system_program::ID;
     
     // Validate token accounts
     if is_sol_to_y {
+        // For SOL->Token leverage, validate that position_token_mint is token Y
         require!(
-            ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_y_mint,
+            ctx.accounts.position_token_mint.key() == ctx.accounts.pool.token_y_mint,
             WhiplashError::InvalidTokenAccounts
         );
     } else {
+        // For Token->SOL leverage, validate that user_token_in is a token Y account
+        let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
-            ctx.accounts.user_token_in.mint == ctx.accounts.pool.token_y_mint,
+            user_token_in_account.mint == ctx.accounts.pool.token_y_mint,
+            WhiplashError::InvalidTokenAccounts
+        );
+        require!(
+            user_token_in_account.owner == ctx.accounts.user.key(),
+            WhiplashError::InvalidTokenAccounts
+        );
+        // For a Token->SOL leverage, verify the user_token_out is the user's wallet
+        require!(
+            ctx.accounts.user_token_out.key() == ctx.accounts.user.key(),
             WhiplashError::InvalidTokenAccounts
         );
     }
@@ -165,19 +174,22 @@ pub fn handle_leverage_swap(
         ];
         let pool_signer = &[&pool_signer_seeds[..]];
         
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.pool.key(),
-            &ctx.accounts.position_token_account.key(),
-            amount_out,
-        );
-        anchor_lang::solana_program::program::invoke_signed(
-            &ix,
-            &[
-                ctx.accounts.pool.to_account_info(),
-                ctx.accounts.position_token_account.to_account_info(),
-            ],
-            pool_signer,
-        )?;
+        // For a short position, we're transferring SOL to the position
+        // Make sure the position_token_account is used as the destination
+        // This account must be able to receive SOL (not be a token account)
+        // Use direct lamport transfer instead of system program transfer
+        let pool_lamports = ctx.accounts.pool.to_account_info().lamports();
+        let position_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
+        
+        // Calculate new lamport values
+        let new_pool_lamports = pool_lamports.checked_sub(amount_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        let new_position_lamports = position_lamports.checked_add(amount_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        
+        // Update lamports
+        **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = new_pool_lamports;
+        **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = new_position_lamports;
     }
     
     // Initialize position data
@@ -212,8 +224,16 @@ pub fn handle_leverage_swap(
     emit!(Swapped {
         user: ctx.accounts.user.key(),
         pool: ctx.accounts.pool.key(),
-        token_in_mint: ctx.accounts.user_token_in.mint,
-        token_out_mint: ctx.accounts.user_token_out.mint,
+        token_in_mint: if is_sol_to_y {
+            anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
+        } else {
+            ctx.accounts.pool.token_y_mint
+        },
+        token_out_mint: if is_sol_to_y {
+            ctx.accounts.pool.token_y_mint
+        } else {
+            anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
+        },
         amount_in,
         amount_out,
         timestamp: Clock::get()?.unix_timestamp,

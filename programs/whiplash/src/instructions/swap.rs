@@ -29,11 +29,9 @@ pub struct Swap<'info> {
     #[account(mut)]
     pub user_token_in: UncheckedAccount<'info>,
     
-    #[account(
-        mut,
-        constraint = user_token_out.owner == user.key() @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub user_token_out: Account<'info, TokenAccount>,
+    /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
+    #[account(mut)]
+    pub user_token_out: UncheckedAccount<'info>,
     
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -49,18 +47,32 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     // If the owner is the System Program, it's a native SOL account
     let is_sol_to_y = ctx.accounts.user_token_in.owner == &anchor_lang::solana_program::system_program::ID;
     
-    // For SOL to token Y, we need to verify user_token_out is a token Y account
     if is_sol_to_y {
+        // For SOL to token Y, we need to verify user_token_out is a token Y account
+        let user_token_out_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_out)?;
         require!(
-            ctx.accounts.user_token_out.mint == ctx.accounts.pool.token_y_mint,
+            user_token_out_account.mint == ctx.accounts.pool.token_y_mint,
+            WhiplashError::InvalidTokenAccounts
+        );
+        require!(
+            user_token_out_account.owner == ctx.accounts.user.key(),
             WhiplashError::InvalidTokenAccounts
         );
     } else {
         // For token Y to SOL, we need to verify user_token_in is a token account that holds token Y
-        // We need to get the mint from the token account
         let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
             user_token_in_account.mint == ctx.accounts.pool.token_y_mint,
+            WhiplashError::InvalidTokenAccounts
+        );
+        require!(
+            user_token_in_account.owner == ctx.accounts.user.key(),
+            WhiplashError::InvalidTokenAccounts
+        );
+        // For a token Y to SOL swap, we need to verify the user_token_out is the user's wallet for receiving SOL
+        // For a SOL output, the account must be a system account (wallet)
+        require!(
+            ctx.accounts.user_token_out.key() == ctx.accounts.user.key(),
             WhiplashError::InvalidTokenAccounts
         );
     }
@@ -128,26 +140,19 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         token::transfer(cpi_ctx_in, amount_in)?;
 
         // Transfer SOL from pool to user
-        let pool_signer_seeds = &[
-            b"pool".as_ref(),
-            ctx.accounts.pool.token_y_mint.as_ref(),
-            &[ctx.accounts.pool.bump],
-        ];
-        let pool_signer = &[&pool_signer_seeds[..]];
+        // The user_token_out MUST be the user wallet account itself when swapping to SOL
+        let pool_lamports = ctx.accounts.pool.to_account_info().lamports();
+        let user_lamports = ctx.accounts.user.to_account_info().lamports();
         
-        let ix = anchor_lang::solana_program::system_instruction::transfer(
-            &ctx.accounts.pool.key(),
-            &ctx.accounts.user.key(),
-            amount_out,
-        );
-        anchor_lang::solana_program::program::invoke_signed(
-            &ix,
-            &[
-                ctx.accounts.pool.to_account_info(),
-                ctx.accounts.user.to_account_info(),
-            ],
-            pool_signer,
-        )?;
+        // Calculate new lamport values
+        let new_pool_lamports = pool_lamports.checked_sub(amount_out)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        let new_user_lamports = user_lamports.checked_add(amount_out)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Update lamports
+        **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = new_pool_lamports;
+        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? = new_user_lamports;
     }
     
     // Update pool reserves
@@ -174,7 +179,11 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
             user_token_in_account.mint
         },
-        token_out_mint: ctx.accounts.user_token_out.mint,
+        token_out_mint: if is_sol_to_y {
+            ctx.accounts.pool.token_y_mint
+        } else {
+            anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
+        },
         amount_in,
         amount_out,
         timestamp: Clock::get()?.unix_timestamp,
