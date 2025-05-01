@@ -46,7 +46,16 @@ pub struct Launch<'info> {
     pub token_vault: Account<'info, TokenAccount>,
 
     /// CHECK: This is the metadata account that will be created
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [
+            b"metadata",
+            token_metadata_program.key().as_ref(),
+            token_mint.key().as_ref(),
+        ],
+        seeds::program = token_metadata_program.key(),
+        bump,
+    )]
     pub metadata: UncheckedAccount<'info>,
     
     pub system_program: Program<'info, System>,
