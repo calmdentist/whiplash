@@ -43,4 +43,10 @@ pub enum WhiplashError {
     
     #[msg("Invalid position")]
     InvalidPosition,
+
+    #[msg("Insufficient output amount")]
+    InsufficientOutput,
+    
+    #[msg("Insufficient funds for transaction")]
+    InsufficientFunds,
 } 

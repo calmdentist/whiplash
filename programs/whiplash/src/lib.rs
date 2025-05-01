@@ -4,11 +4,13 @@ mod instructions;
 mod state;
 mod error;
 mod events;
+mod utils;
 
 pub use instructions::*;
 pub use state::*;
 pub use error::*;
 pub use events::*;
+pub use utils::*;
 
 declare_id!("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
 
@@ -41,5 +43,9 @@ pub mod whiplash {
     
     pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
         instructions::liquidate::handle_liquidate(ctx)
+    }
+
+    pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
+        instructions::close_position::handle_close_position(ctx)
     }
 }

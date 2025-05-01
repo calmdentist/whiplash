@@ -3,7 +3,7 @@ use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
     associated_token::AssociatedToken,
 };
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, WhiplashError, utils};
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
@@ -63,7 +63,9 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let pool = &ctx.accounts.pool;
     
     // Calculate the required output to repay the borrowed amount
-    let borrowed_amount = position.collateral.checked_mul((position.leverage as u64) - 1)
+    let borrowed_amount = position.collateral.checked_mul(position.leverage as u64)
+        .ok_or(error!(WhiplashError::MathOverflow))?
+        .checked_div(10u64)
         .ok_or(error!(WhiplashError::MathOverflow))?;
     
     // Get the current position value
@@ -72,41 +74,19 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         .ok_or(error!(WhiplashError::MathOverflow))?;
     let total_y = pool.token_y_amount.checked_add(pool.virtual_token_y_amount)
         .ok_or(error!(WhiplashError::MathOverflow))?;
-        
-    // Using u128 for intermediate calculations
-    let x_u128: u128 = total_x as u128;
-    let y_u128: u128 = total_y as u128;
-    let position_size_u128: u128 = position_size as u128;
     
-    // Calculate the expected output based on position type
-    let expected_output_u128 = if position.is_long {
-        // Long position: holding tokens, need to calculate Token->SOL swap
-        // Formula: (x * y_position) / (y + y_position)
-        (x_u128.checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?)
-            .checked_div(y_u128.checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?)
-            .ok_or(error!(WhiplashError::MathOverflow))?
-    } else {
-        // Short position: holding SOL, need to calculate SOL->Token swap
-        // Formula: (y * x_position) / (x + x_position)
-        (y_u128.checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?)
-            .checked_div(x_u128.checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?)
-            .ok_or(error!(WhiplashError::MathOverflow))?
-    };
-    
-    // Ensure the result fits in u64
-    if expected_output_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
-    }
-    
-    let expected_output = expected_output_u128 as u64;
+    // Calculate expected output using utility function
+    let expected_output = utils::calculate_position_expected_output(
+        total_x,
+        total_y,
+        position_size,
+        position.is_long,
+        position.leverage,
+    )?;
     
     // Liquidation condition check: expected_output < borrowed_amount
     require!(
-        expected_output < borrowed_amount,
+        expected_output < borrowed_amount * 102u64 / 100u64, //2% fee buffer (incentivizes liquidation)
         WhiplashError::PositionNotLiquidatable
     );
     

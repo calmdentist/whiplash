@@ -826,4 +826,201 @@ describe("whiplash", () => {
       throw error;
     }
   });
+  
+  it("Closes a position and returns funds", async () => {
+    try {
+      // Create a test account for position testing
+      const positionTest = Keypair.generate();
+      
+      // Fund the test account
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(
+          positionTest.publicKey,
+          0.5 * LAMPORTS_PER_SOL
+        )
+      );
+      
+      // Create position PDA for the test account
+      const [testPositionPda, testPositionBump] = await PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("position"),
+          poolPda.toBuffer(),
+          positionTest.publicKey.toBuffer(),
+        ],
+        program.programId
+      );
+      
+      console.log("Test Position PDA:", testPositionPda.toBase58());
+      
+      // Create token account for the position
+      const testPositionTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        testPositionPda,
+        true // allowOwnerOffCurve
+      );
+      
+      console.log("Test Position Token Account:", testPositionTokenAccount.toBase58());
+      
+      // Create token account for the test user
+      const testUserTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        positionTest.publicKey
+      );
+      
+      // Create the token account for the test user
+      const createATAIx = createAssociatedTokenAccountInstruction(
+        wallet.publicKey,
+        testUserTokenAccount,
+        positionTest.publicKey,
+        tokenMint
+      );
+      
+      // Send some SOL to the test user for transaction fees
+      const transferTokenIx = anchor.web3.SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey: positionTest.publicKey,
+        lamports: 0.05 * LAMPORTS_PER_SOL,
+      });
+      
+      const setupTx = new anchor.web3.Transaction().add(
+        transferTokenIx,
+        createATAIx
+      );
+      
+      await provider.sendAndConfirm(setupTx);
+      
+      // Transfer tokens from wallet's token account to test user's token account
+      const userTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        wallet.publicKey
+      );
+      
+      const transferTokensTx = new anchor.web3.Transaction().add(
+        createTransferInstruction(
+          userTokenAccount,
+          testUserTokenAccount,
+          wallet.publicKey,
+          TOKEN_SWAP_AMOUNT * 2 // Double the amount to ensure enough for test
+        )
+      );
+      
+      await provider.sendAndConfirm(transferTokensTx);
+      console.log("Transferred tokens to test user");
+      
+      // Get initial balances
+      const initialSolBalance = await provider.connection.getBalance(positionTest.publicKey);
+      const initialTokenAccountInfo = await getAccount(provider.connection, testUserTokenAccount);
+      const initialTokenBalance = Number(initialTokenAccountInfo.amount);
+      
+      // Open a short position (Token->SOL)
+      const POSITION_COLLATERAL = TOKEN_SWAP_AMOUNT;
+      const POSITION_LEVERAGE = 5;
+      
+      const openTx = await program.methods
+        .leverageSwap(
+          new BN(POSITION_COLLATERAL),
+          new BN(0), // minAmountOut (0 for test simplicity)
+          POSITION_LEVERAGE
+        )
+        .accounts({
+          user: positionTest.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: testUserTokenAccount,
+          userTokenOut: positionTest.publicKey,
+          position: testPositionPda,
+          positionTokenAccount: testPositionTokenAccount,
+          positionTokenMint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([positionTest])
+        .rpc();
+      
+      console.log("Opened position, tx:", openTx);
+      await provider.connection.confirmTransaction(openTx);
+      
+      // Verify position was created
+      const position = await program.account.position.fetch(testPositionPda);
+      console.log("Position created with size:", position.size.toString());
+      console.log("Position leverage:", position.leverage);
+      console.log("Position collateral:", position.collateral.toString());
+      console.log("Position is long:", position.isLong);
+      
+      // Get pool state before closing
+      const poolBeforeClose = await program.account.pool.fetch(poolPda);
+      console.log("Pool state before closing:");
+      console.log("Pool lamports:", poolBeforeClose.lamports.toString());
+      console.log("Pool token amount:", poolBeforeClose.tokenYAmount.toString());
+      console.log("Pool virtual SOL:", poolBeforeClose.virtualSolAmount.toString());
+      console.log("Pool virtual tokens:", poolBeforeClose.virtualTokenYAmount.toString());
+      
+      // Get balances after opening position
+      const afterOpenSolBalance = await provider.connection.getBalance(positionTest.publicKey);
+      const afterOpenTokenAccountInfo = await getAccount(provider.connection, testUserTokenAccount);
+      const afterOpenTokenBalance = Number(afterOpenTokenAccountInfo.amount);
+      
+      // Verify initial collateral was deducted
+      expect(afterOpenTokenBalance).to.equal(initialTokenBalance - POSITION_COLLATERAL);
+      
+      // Now close the position
+      const closeTx = await program.methods
+        .closePosition()
+        .accounts({
+          user: positionTest.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          position: testPositionPda,
+          positionTokenAccount: testPositionTokenAccount,
+          userTokenOut: testUserTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([positionTest])
+        .rpc();
+      
+      console.log("Closed position, tx:", closeTx);
+      await provider.connection.confirmTransaction(closeTx);
+      
+      // Verify position was closed
+      try {
+        await program.account.position.fetch(testPositionPda);
+        assert.fail("Position should have been closed");
+      } catch (err) {
+        // Expected error - position was closed
+        expect(err.toString()).to.include("Account does not exist");
+      }
+      
+      // Get final balances
+      const finalSolBalance = await provider.connection.getBalance(positionTest.publicKey);
+      const finalTokenAccountInfo = await getAccount(provider.connection, testUserTokenAccount);
+      const finalTokenBalance = Number(finalTokenAccountInfo.amount);
+      
+      // For a short position:
+      // 1. Initial collateral (tokens) should be returned
+      // 2. Position size (SOL) should be deducted
+      expect(finalTokenBalance).to.be.above(afterOpenTokenBalance);
+      // For short positions, the SOL balance is expected to increase because:
+      // - The position account is closed and rent is returned to the user
+      // - No SOL is deducted from the user when closing
+      expect(finalSolBalance).to.be.above(afterOpenSolBalance);
+      
+      // Verify the position token account was closed
+      try {
+        await getAccount(provider.connection, testPositionTokenAccount);
+        assert.fail("Position token account should have been closed");
+      } catch (err) {
+        // Expected error - account was closed
+        expect(err.toString()).to.include("TokenAccountNotFoundError");
+      }
+      
+      console.log("Position closed successfully!");
+    } catch (error) {
+      console.error("Close position test error:", error);
+      throw error;
+    }
+  });
 }); 
