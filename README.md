@@ -59,6 +59,13 @@ anchor build
 
 # Run tests
 anchor test
+
+# Start local validator with metaplex program (dependency)
+solana-test-validator --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s ~/Desktop/whiplash/tests/metaplex_token_metadata_program.so --url https://api.mainnet-beta.solana.com --reset
+
+# Set up local environment
+anchor run deploy
+
 ```
 
 ## License

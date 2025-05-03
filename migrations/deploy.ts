@@ -8,6 +8,7 @@ import { PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY, Keypair } from "@solana/w
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 
 // Define the Metaplex Token Metadata Program ID
 const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
@@ -23,49 +24,49 @@ async function main() {
     // Configure client to use the provider.
     anchor.setProvider(provider);
 
-    // Deploy Metaplex Token Metadata program first
-    console.log("Reading Metaplex program file...");
-    const metaplexProgramPath = path.join(__dirname, "../tests/metaplex_token_metadata_program.so");
-    console.log("Metaplex program path:", metaplexProgramPath);
+    // // Deploy Metaplex Token Metadata program first
+    // console.log("Reading Metaplex program file...");
+    // const metaplexProgramPath = path.join(__dirname, "../tests/metaplex_token_metadata_program.so");
+    // console.log("Metaplex program path:", metaplexProgramPath);
     
-    if (!fs.existsSync(metaplexProgramPath)) {
-      throw new Error(`Metaplex program file not found at ${metaplexProgramPath}`);
-    }
+    // if (!fs.existsSync(metaplexProgramPath)) {
+    //   throw new Error(`Metaplex program file not found at ${metaplexProgramPath}`);
+    // }
     
-    console.log("Metaplex program file found");
+    // console.log("Metaplex program file found");
     
-    console.log("Deploying Metaplex Token Metadata program...");
+    // console.log("Deploying Metaplex Token Metadata program...");
     console.log("Requesting airdrop for provider wallet...");
     const airdropSig = await provider.connection.requestAirdrop(provider.wallet.publicKey, 10000000000);
     await provider.connection.confirmTransaction(airdropSig);
     console.log("Airdrop confirmed for provider wallet");
 
-    // Generate a new keypair for the Metaplex program
-    const metaplexKeypair = Keypair.generate();
-    console.log("Generated new keypair for Metaplex program:", metaplexKeypair.publicKey.toString());
+    // // Generate a new keypair for the Metaplex program
+    // const metaplexKeypair = Keypair.generate();
+    // console.log("Generated new keypair for Metaplex program:", metaplexKeypair.publicKey.toString());
 
-    // Save the keypair to a file
-    const keypairPath = path.join(__dirname, "../target/deploy/metaplex-keypair.json");
-    fs.writeFileSync(keypairPath, JSON.stringify(Array.from(metaplexKeypair.secretKey)));
-    console.log("Saved Metaplex keypair to:", keypairPath);
+    // // Save the keypair to a file
+    // const keypairPath = path.join(__dirname, "../target/deploy/metaplex-keypair.json");
+    // fs.writeFileSync(keypairPath, JSON.stringify(Array.from(metaplexKeypair.secretKey)));
+    // console.log("Saved Metaplex keypair to:", keypairPath);
 
-    // Deploy Metaplex program using solana program deploy
-    const metaplexProgramId = metaplexKeypair.publicKey;
-    console.log("Deploying Metaplex program...");
-    const { execSync } = require('child_process');
-    execSync(`solana program deploy ${metaplexProgramPath} --program-id ${keypairPath} --url localhost`, { stdio: 'inherit' });
-    console.log("Metaplex program deployed!");
+    // // Deploy Metaplex program using solana program deploy
+    // const metaplexProgramId = metaplexKeypair.publicKey;
+    // console.log("Deploying Metaplex program...");
+    // const { execSync } = require('child_process');
+    // execSync(`solana program deploy ${metaplexProgramPath} --program-id ${keypairPath} --url localhost`, { stdio: 'inherit' });
+    // console.log("Metaplex program deployed!");
 
-    // Wait for deployment to be confirmed
-    console.log("Waiting for Metaplex program deployment to be confirmed...");
-    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+    // // Wait for deployment to be confirmed
+    // console.log("Waiting for Metaplex program deployment to be confirmed...");
+    // await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-    // Verify Metaplex program is deployed
-    const metaplexProgramInfo = await provider.connection.getAccountInfo(metaplexProgramId);
-    if (!metaplexProgramInfo || !metaplexProgramInfo.executable) {
-      throw new Error("Metaplex program is not deployed or not executable");
-    }
-    console.log("Metaplex program deployment verified");
+    // // Verify Metaplex program is deployed
+    // const metaplexProgramInfo = await provider.connection.getAccountInfo(metaplexProgramId);
+    // if (!metaplexProgramInfo || !metaplexProgramInfo.executable) {
+    //   throw new Error("Metaplex program is not deployed or not executable");
+    // }
+    // console.log("Metaplex program deployment verified");
 
     // Deploy Whiplash program
     console.log("Deploying Whiplash program...");
@@ -158,7 +159,7 @@ async function main() {
         tokenProgram: TOKEN_PROGRAM_ID,
         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         rent: SYSVAR_RENT_PUBKEY,
-        tokenMetadataProgram: metaplexProgramId,
+        tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
       })
       .signers([tokenMint])
       .rpc();
