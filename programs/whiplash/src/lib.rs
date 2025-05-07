@@ -36,9 +36,10 @@ pub mod whiplash {
         ctx: Context<LeverageSwap>,
         amount_in: u64,
         min_amount_out: u64,
-        leverage: u8,
+        leverage: u32,
+        nonce: u64,
     ) -> Result<()> {
-        instructions::leverage_swap::handle_leverage_swap(ctx, amount_in, min_amount_out, leverage)
+        instructions::leverage_swap::handle_leverage_swap(ctx, amount_in, min_amount_out, leverage, nonce)
     }
     
     pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {

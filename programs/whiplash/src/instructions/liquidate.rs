@@ -38,8 +38,10 @@ pub struct Liquidate<'info> {
             b"position".as_ref(),
             pool.key().as_ref(),
             position_owner.key().as_ref(),
+            position.nonce.to_le_bytes().as_ref(),
         ],
         bump,
+        close = liquidator,
         constraint = position.authority == position_owner.key() @ WhiplashError::InvalidPosition,
         constraint = position.pool == pool.key() @ WhiplashError::InvalidPosition,
     )]
@@ -94,15 +96,17 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     // Handle based on position type
     if position.is_long {
         // Long position: transfer tokens from position to vault
-        // Store key references to avoid temporary value issues
+        let bump = *ctx.bumps.get("position").unwrap();
         let pool_key = ctx.accounts.pool.key();
         let position_owner_key = ctx.accounts.position_owner.key();
-        let bump = *ctx.bumps.get("position").unwrap();
+        let position_nonce = position.nonce;
         
+        let nonce_bytes = position_nonce.to_le_bytes();
         let position_seeds = &[
             b"position".as_ref(),
             pool_key.as_ref(),
             position_owner_key.as_ref(),
+            nonce_bytes.as_ref(),
             &[bump],
         ];
         
@@ -164,8 +168,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         timestamp: Clock::get()?.unix_timestamp,
     });
     
-    // Close the position account
-    ctx.accounts.position.close(ctx.accounts.liquidator.to_account_info())?;
+    // Position account is automatically closed due to the close = liquidator constraint
     
     Ok(())
 } 

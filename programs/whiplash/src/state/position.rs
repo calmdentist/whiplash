@@ -19,13 +19,16 @@ pub struct Position {
     pub collateral: u64,
 
     // The leverage multiplier
-    pub leverage: u8,
+    pub leverage: u32,
 
     // The entry price of the position
     pub entry_price: u128,
 
     // The position size (output token amount)
     pub size: u64,
+
+    // The position nonce (allows for multiple positions in same pool)
+    pub nonce: u64,
 
     // Bump seed for PDA derivation
     pub bump: u8,

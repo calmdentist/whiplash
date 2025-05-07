@@ -7,7 +7,7 @@ pub fn calculate_position_expected_output(
     total_y: u64,
     position_size: u64,
     is_long: bool,
-    leverage: u8,
+    leverage: u32,
 ) -> Result<u64> {
     // Using u128 for intermediate calculations
     let x_u128: u128 = total_x as u128;

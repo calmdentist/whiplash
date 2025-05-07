@@ -43,6 +43,7 @@ describe("whiplash", () => {
   let positionPda: PublicKey;
   let positionBump: number;
   let positionTokenAccount: PublicKey;
+  let positionNonce: number;
 
   // Pool initial values
   const INITIAL_TOKEN_AMOUNT = 1_000_000 * 10 ** 6; // 1 million tokens with 6 decimals
@@ -51,7 +52,7 @@ describe("whiplash", () => {
   const METADATA_URI = "https://ipfs.io/ipfs/QmVySXmdq9qNG7H98tW5v8KTSUqPsLBYfo3EaKgR2shJex";
   const SWAP_AMOUNT = 1 * LAMPORTS_PER_SOL; // 1 SOL
   const TOKEN_SWAP_AMOUNT = 100 * 10 ** 6; // 100 tokens with 6 decimals
-  const LEVERAGE = 5; // 5x leverage
+  const LEVERAGE = 50; // 5x leverage
 
   before(async () => {
     // Use the keypair's public key
@@ -95,16 +96,24 @@ describe("whiplash", () => {
     );
     console.log("Metadata PDA:", metadataPda.toBase58());
     
+    // Generate a random nonce for the position
+    positionNonce = Math.floor(Math.random() * 1000000); // Use smaller range for nonce
+    
+    // Log the actual bytes for the nonce to help with debugging
+    const nonceBytes = new BN(positionNonce).toArrayLike(Buffer, "le", 8);
+    
     // Derive the position PDA for leverage swap tests
     [positionPda, positionBump] = await PublicKey.findProgramAddressSync(
       [
         Buffer.from("position"),
         poolPda.toBuffer(),
         wallet.publicKey.toBuffer(),
+        nonceBytes, // Use the logged bytes
       ],
       program.programId
     );
     console.log("Position PDA:", positionPda.toBase58(), "with bump:", positionBump);
+    console.log("Position nonce:", positionNonce);
     
     // Calculate the position token account address
     positionTokenAccount = await getAssociatedTokenAddress(
@@ -411,7 +420,8 @@ describe("whiplash", () => {
         .leverageSwap(
           new BN(SWAP_AMOUNT),       // amountIn (collateral)
           new BN(minOutputAmount),   // minAmountOut
-          LEVERAGE                   // leverage factor
+          LEVERAGE,                  // leverage factor
+          new BN(positionNonce)      // nonce
         )
         .accounts({
           user: wallet.publicKey,
@@ -485,12 +495,19 @@ describe("whiplash", () => {
         )
       );
 
-      // We need another position PDA for this test as we already used the one for the long position
+      // Generate a random nonce for the short position
+      const shortPositionNonce = Math.floor(Math.random() * 1000000);
+      
+      // Log the actual bytes for the nonce to help with debugging
+      const shortNonceBytes = new BN(shortPositionNonce).toArrayLike(Buffer, "le", 8);
+      
+      // Create position PDA for the test account with nonce
       const [shortPositionPda, shortPositionBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
           poolPda.toBuffer(),
           shortPositionUser.publicKey.toBuffer(),
+          shortNonceBytes, // Use the logged bytes
         ],
         program.programId
       );
@@ -579,7 +596,8 @@ describe("whiplash", () => {
         .leverageSwap(
           new BN(TOKEN_SWAP_AMOUNT),  // amountIn (collateral)
           new BN(minOutputAmount),    // minAmountOut
-          LEVERAGE                    // leverage factor
+          LEVERAGE,                   // leverage factor
+          new BN(shortPositionNonce)  // nonce
         )
         .accounts({
           user: shortPositionUser.publicKey,
@@ -670,12 +688,19 @@ describe("whiplash", () => {
         )
       );
       
-      // Create position PDA for the test account
+      // Generate a random nonce for the liquidation test position
+      const liquidationNonce = Math.floor(Math.random() * 1000000);
+      
+      // Log the actual bytes for the nonce to help with debugging
+      const liquidationNonceBytes = new BN(liquidationNonce).toArrayLike(Buffer, "le", 8);
+      
+      // Create position PDA for the test account with nonce
       const [liquidationPositionPda, liquidationPositionBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
           poolPda.toBuffer(),
           liquidationTest.publicKey.toBuffer(),
+          liquidationNonceBytes, // Use the logged bytes
         ],
         program.programId
       );
@@ -692,7 +717,7 @@ describe("whiplash", () => {
       console.log("Liquidation Position Token Account:", liquidationPositionTokenAccount.toBase58());
       
       // Set leverage higher to make liquidation easier
-      const LIQUIDATION_LEVERAGE = 8; // 8x leverage
+      const LIQUIDATION_LEVERAGE = 80; // 8x leverage
       const POSITION_COLLATERAL = 0.1 * LAMPORTS_PER_SOL; // 0.1 SOL
       
       // Open a long position (SOL->Token)
@@ -700,7 +725,8 @@ describe("whiplash", () => {
         .leverageSwap(
           new BN(POSITION_COLLATERAL), // amountIn (collateral)
           new BN(0),                   // minAmountOut (0 for test simplicity)
-          LIQUIDATION_LEVERAGE         // leverage factor
+          LIQUIDATION_LEVERAGE,         // leverage factor
+          new BN(liquidationNonce)      // nonce
         )
         .accounts({
           user: liquidationTest.publicKey,
@@ -840,12 +866,19 @@ describe("whiplash", () => {
         )
       );
       
-      // Create position PDA for the test account
+      // Generate a random nonce for the test position
+      const testPositionNonce = Math.floor(Math.random() * 1000000);
+      
+      // Log the actual bytes for the nonce to help with debugging
+      const testNonceBytes = new BN(testPositionNonce).toArrayLike(Buffer, "le", 8);
+      
+      // Create position PDA for the test account with nonce
       const [testPositionPda, testPositionBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
           poolPda.toBuffer(),
           positionTest.publicKey.toBuffer(),
+          testNonceBytes, // Use the logged bytes
         ],
         program.programId
       );
@@ -914,13 +947,14 @@ describe("whiplash", () => {
       
       // Open a short position (Token->SOL)
       const POSITION_COLLATERAL = TOKEN_SWAP_AMOUNT;
-      const POSITION_LEVERAGE = 5;
+      const POSITION_LEVERAGE = 50;
       
       const openTx = await program.methods
         .leverageSwap(
           new BN(POSITION_COLLATERAL),
           new BN(0), // minAmountOut (0 for test simplicity)
-          POSITION_LEVERAGE
+          POSITION_LEVERAGE,
+          new BN(testPositionNonce) // nonce
         )
         .accounts({
           user: positionTest.publicKey,

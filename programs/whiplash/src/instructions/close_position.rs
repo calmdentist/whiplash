@@ -34,8 +34,10 @@ pub struct ClosePosition<'info> {
             b"position".as_ref(),
             pool.key().as_ref(),
             user.key().as_ref(),
+            position.nonce.to_le_bytes().as_ref(),
         ],
         bump,
+        close = user,
         constraint = position.authority == user.key() @ WhiplashError::InvalidPosition,
         constraint = position.pool == pool.key() @ WhiplashError::InvalidPosition,
     )]
@@ -97,21 +99,24 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let pool_bump = pool.bump;
     let pool_mint = pool.token_y_mint;
     
-    // Use position's PDA for signing
-    let position_bump = *ctx.bumps.get("position").unwrap(); 
+    // Get the position bump from context
+    let bump = *ctx.bumps.get("position").unwrap();
     let pool_key = ctx.accounts.pool.key();
     let user_key = ctx.accounts.user.key();
+    let position_nonce = position.nonce;
     
     // Handle based on position type
     if position.is_long {
         // LONG POSITION (User holds Y tokens, gets SOL back)
         
         // 1. Transfer tokens from position to vault
+        let nonce_bytes = position_nonce.to_le_bytes();
         let position_seeds = &[
             b"position".as_ref(),
             pool_key.as_ref(),
             user_key.as_ref(),
-            &[position_bump],
+            nonce_bytes.as_ref(),
+            &[bump],
         ];
         let position_signer = &[&position_seeds[..]];
         
@@ -207,19 +212,20 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         timestamp: Clock::get()?.unix_timestamp,
     });
     
-    // Close the position account and collect the rent
-    ctx.accounts.position.close(ctx.accounts.user.to_account_info())?;
+    // Position account is automatically closed due to the close = user constraint
     
     // Close the position token account if it's a short position
     // For long positions, token::transfer already emptied the account
     // For short positions, we need to manually close the account
     if !position.is_long {
         // Create seeds for position PDA to act as authority
+        let nonce_bytes = position_nonce.to_le_bytes();
         let position_seeds = &[
             b"position".as_ref(),
             pool_key.as_ref(),
             user_key.as_ref(),
-            &[position_bump],
+            nonce_bytes.as_ref(),
+            &[bump],
         ];
         let position_signer = &[&position_seeds[..]];
         

@@ -6,6 +6,7 @@ use anchor_spl::{
 use crate::{state::*, events::*, WhiplashError};
 
 #[derive(Accounts)]
+#[instruction(amount_in: u64, min_amount_out: u64, leverage: u32, nonce: u64)]
 pub struct LeverageSwap<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -44,6 +45,7 @@ pub struct LeverageSwap<'info> {
             b"position".as_ref(),
             pool.key().as_ref(),
             user.key().as_ref(),
+            nonce.to_le_bytes().as_ref(),
         ],
         bump,
     )]
@@ -69,7 +71,8 @@ pub fn handle_leverage_swap(
     ctx: Context<LeverageSwap>, 
     amount_in: u64, 
     min_amount_out: u64, 
-    leverage: u8,
+    leverage: u32,
+    nonce: u64,
 ) -> Result<()> {
     // Validate input amount
     if amount_in == 0 {
@@ -193,6 +196,7 @@ pub fn handle_leverage_swap(
     position.collateral = amount_in;
     position.leverage = leverage;
     position.size = amount_out;
+    position.nonce = nonce;
     
     // Calculate entry price (simple estimation as average price) as Q64.64 u128
     let entry_price = ((amount_in as u128 * leverage as u128) << 64) / ((amount_out as u128) << 64);

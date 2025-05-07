@@ -26,7 +26,7 @@ pub struct PositionOpened {
     pub position: Pubkey,
     pub is_long: bool,
     pub collateral: u64,
-    pub leverage: u8,
+    pub leverage: u32,
     pub size: u64,
     pub entry_price: u128,
     pub timestamp: i64,
