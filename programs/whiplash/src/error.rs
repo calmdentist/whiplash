@@ -49,4 +49,7 @@ pub enum WhiplashError {
     
     #[msg("Insufficient funds for transaction")]
     InsufficientFunds,
+
+    #[msg("Invalid leverage")]
+    InvalidLeverage,
 } 

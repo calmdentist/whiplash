@@ -64,7 +64,8 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let pool = &ctx.accounts.pool;
     
     // Calculate the borrowed amount that needs to be repaid
-    let borrowed_amount = position.collateral.checked_mul(position.leverage as u64)
+    let borrowed_amount = position.collateral
+        .checked_mul(position.leverage.checked_sub(10).unwrap_or(0) as u64)
         .ok_or(error!(WhiplashError::MathOverflow))?
         .checked_div(10u64)
         .ok_or(error!(WhiplashError::MathOverflow))?;

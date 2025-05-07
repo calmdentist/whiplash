@@ -38,18 +38,7 @@ pub fn calculate_position_expected_output(
         return Err(error!(WhiplashError::MathOverflow));
     }
 
-    let expected_output = expected_output_u128 as u64;
-
-    // For short positions, we need to adjust the output by the leverage factor
-    // since the position size is already leveraged
-    let adjusted_output = if !is_long {
-        expected_output.checked_mul(10u64)
-            .ok_or(error!(WhiplashError::MathOverflow))?
-            .checked_div(leverage as u64)
-            .ok_or(error!(WhiplashError::MathOverflow))?
-    } else {
-        expected_output
-    };
-
-    Ok(adjusted_output)
+    // Return the result directly without any adjustment, letting the
+    // caller handle any needed adjustments based on position type
+    Ok(expected_output_u128 as u64)
 } 

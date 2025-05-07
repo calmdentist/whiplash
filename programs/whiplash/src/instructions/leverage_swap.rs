@@ -78,6 +78,12 @@ pub fn handle_leverage_swap(
     if amount_in == 0 {
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
+
+    // Validate leverage
+    require!(
+        leverage >= 10 && leverage <= 100,
+        WhiplashError::InvalidLeverage
+    );
     
     // Check if token in is SOL based on the owner of the account
     // If the owner is the System Program, it's a native SOL account
