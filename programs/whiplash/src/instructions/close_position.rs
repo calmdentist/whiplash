@@ -83,7 +83,6 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         total_y,
         position_size,
         position.is_long,
-        position.leverage,
     )?;
     
     // Check if the output is sufficient to repay the borrowed amount

@@ -83,7 +83,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         total_y,
         position_size,
         position.is_long,
-        position.leverage,
     )?;
     
     // Liquidation condition check: expected_output < borrowed_amount
