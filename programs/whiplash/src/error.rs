@@ -17,6 +17,9 @@ pub enum WhiplashError {
     #[msg("Mathematical operation overflow")]
     MathOverflow,
     
+    #[msg("Mathematical operation underflow")]
+    MathUnderflow,
+    
     #[msg("Pool already initialized")]
     PoolAlreadyInitialized,
     

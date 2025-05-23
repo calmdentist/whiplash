@@ -214,12 +214,12 @@ pub fn handle_leverage_swap(
         pool.lamports = pool.lamports.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
     } else {
         pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.lamports = pool.lamports.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
     }
     
     // Emit swap event
