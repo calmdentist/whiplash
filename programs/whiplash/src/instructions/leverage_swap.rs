@@ -121,6 +121,53 @@ pub fn handle_leverage_swap(
         ctx.accounts.pool.calculate_swap_y_to_x(amount_in * leverage as u64 / 10)?
     };
     
+    // -----------------------------------------------------------------
+    // Calculate and store Δk (delta_k)
+    // -----------------------------------------------------------------
+    let pool_before = &ctx.accounts.pool;
+
+    // Total reserves before the swap (real + virtual)
+    let total_x_before: u128 = pool_before.lamports
+        .checked_add(pool_before.virtual_sol_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    let total_y_before: u128 = pool_before.token_y_amount
+        .checked_add(pool_before.virtual_token_y_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+
+    // Reserves after the swap (but before we mutate pool state)
+    let (total_x_after, total_y_after): (u128, u128) = if is_sol_to_y {
+        // Long position: user deposits SOL (amount_in) and takes Y (amount_out)
+        (
+            total_x_before
+                .checked_add(amount_in as u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?,
+            total_y_before
+                .checked_sub(amount_out as u128)
+                .ok_or(error!(WhiplashError::MathUnderflow))?,
+        )
+    } else {
+        // Short position: user deposits Y (amount_in) and takes SOL (amount_out)
+        (
+            total_x_before
+                .checked_sub(amount_out as u128)
+                .ok_or(error!(WhiplashError::MathUnderflow))?,
+            total_y_before
+                .checked_add(amount_in as u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?,
+        )
+    };
+
+    let k_before = total_x_before
+        .checked_mul(total_y_before)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+    let k_after = total_x_after
+        .checked_mul(total_y_after)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+
+    let delta_k = k_before
+        .checked_sub(k_after)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
+    
     // Check minimum output amount
     require!(
         amount_out >= min_amount_out,
@@ -202,6 +249,7 @@ pub fn handle_leverage_swap(
     position.collateral = amount_in;
     position.leverage = leverage;
     position.size = amount_out;
+    position.delta_k = delta_k;
     position.nonce = nonce;
     
     // Calculate entry price (simple estimation as average price) as Q64.64 u128

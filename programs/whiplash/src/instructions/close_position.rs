@@ -3,7 +3,7 @@ use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
     associated_token::AssociatedToken,
 };
-use crate::{state::*, events::*, WhiplashError, utils};
+use crate::{state::*, events::*, WhiplashError};
 
 #[derive(Accounts)]
 pub struct ClosePosition<'info> {
@@ -63,37 +63,90 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let position = &ctx.accounts.position;
     let pool = &ctx.accounts.pool;
     
-    // Calculate the borrowed amount that needs to be repaid
-    let borrowed_amount = position.collateral
-        .checked_mul(position.leverage.checked_sub(10).unwrap_or(0) as u64)
-        .ok_or(error!(WhiplashError::MathOverflow))?
-        .checked_div(10u64)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    
-    // Get the current position value
+    // -----------------------------------------------------------------
+    // Calculate payout using Δk model
+    // -----------------------------------------------------------------
+
     let position_size = position.size;
-    let total_x = pool.lamports.checked_add(pool.virtual_sol_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    let total_y = pool.token_y_amount.checked_add(pool.virtual_token_y_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    
-    // Calculate expected output using utility function
-    let expected_output = utils::calculate_position_expected_output(
-        total_x,
-        total_y,
-        position_size,
-        position.is_long,
-    )?;
-    
-    // Check if the output is sufficient to repay the borrowed amount
-    require!(
-        expected_output >= borrowed_amount,
-        WhiplashError::InsufficientOutput
-    );
-    
-    // Calculate user output
-    let user_output = expected_output.checked_sub(borrowed_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+
+    // Current total reserves (real + virtual)
+    let total_x: u128 = pool.lamports
+        .checked_add(pool.virtual_sol_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    let total_y: u128 = pool.token_y_amount
+        .checked_add(pool.virtual_token_y_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+
+    let position_size_u128: u128 = position_size as u128;
+    let delta_k: u128 = position.delta_k;
+
+    // Determine payout depending on position side
+    let (payout_u128, is_liquidatable) = if position.is_long {
+        // Long: user returns Y tokens and gets SOL
+        // X_out = (x * y_pos - delta_k) / (y + y_pos)
+        let product_val = total_x
+            .checked_mul(position_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        let numerator = if product_val <= delta_k {
+            0u128
+        } else {
+            product_val
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?
+        };
+
+        if numerator == 0u128 {
+            (0u128, true)
+        } else {
+            let denominator = total_y
+                .checked_add(position_size_u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            (
+                numerator
+                    .checked_div(denominator)
+                    .ok_or(error!(WhiplashError::MathOverflow))?,
+                false,
+            )
+        }
+    } else {
+        // Short: user returns SOL (x_pos) and gets Y tokens
+        // Y_out = (x_pos * y - delta_k) / (x + x_pos)
+        let product_val = position_size_u128
+            .checked_mul(total_y)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        let numerator = if product_val <= delta_k {
+            0u128
+        } else {
+            product_val
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?
+        };
+
+        if numerator == 0u128 {
+            (0u128, true)
+        } else {
+            let denominator = total_x
+                .checked_add(position_size_u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            (
+                numerator
+                    .checked_div(denominator)
+                    .ok_or(error!(WhiplashError::MathOverflow))?,
+                false,
+            )
+        }
+    };
+
+    // If payout is zero, the position should be liquidated instead of closed
+    require!(!is_liquidatable && payout_u128 > 0, WhiplashError::PositionNotClosable);
+
+    if payout_u128 > u64::MAX as u128 {
+        return Err(error!(WhiplashError::MathOverflow));
+    }
+
+    let user_output: u64 = payout_u128 as u64;
     
     // Get PDA info for signing
     let pool_bump = pool.bump;
@@ -206,8 +259,8 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         position: ctx.accounts.position.key(),
         is_long: position.is_long,
         position_size,
-        borrowed_amount,
-        output_amount: expected_output,
+        borrowed_amount: 0u64,
+        output_amount: payout_u128 as u64,
         user_received: user_output,
         timestamp: Clock::get()?.unix_timestamp,
     });

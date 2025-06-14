@@ -3,7 +3,7 @@ use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
     associated_token::AssociatedToken,
 };
-use crate::{state::*, events::*, WhiplashError, utils};
+use crate::{state::*, events::*, WhiplashError};
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
@@ -64,30 +64,72 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let position = &ctx.accounts.position;
     let pool = &ctx.accounts.pool;
     
-    // Calculate the required output to repay the borrowed amount
-    let borrowed_amount = position.collateral.checked_mul(position.leverage as u64)
-        .ok_or(error!(WhiplashError::MathOverflow))?
-        .checked_div(10u64)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    
-    // Get the current position value
+    // -----------------------------------------------------------------
+    // New liquidation condition based on Δk
+    // A position is liquidatable when its payout would be zero or negative.
+    // For a long: x_current * y_pos <= delta_k
+    // For a short: y_current * x_pos <= delta_k
+    // -----------------------------------------------------------------
+
+    let position_size_u128: u128 = position.size as u128;
     let position_size = position.size;
-    let total_x = pool.lamports.checked_add(pool.virtual_sol_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    let total_y = pool.token_y_amount.checked_add(pool.virtual_token_y_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    
-    // Calculate expected output using utility function
-    let expected_output = utils::calculate_position_expected_output(
-        total_x,
-        total_y,
-        position_size,
-        position.is_long,
-    )?;
-    
-    // Liquidation condition check: expected_output < borrowed_amount
+
+    // Current total reserves (real + virtual)
+    let total_x: u128 = pool.lamports
+        .checked_add(pool.virtual_sol_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    let total_y: u128 = pool.token_y_amount
+        .checked_add(pool.virtual_token_y_amount)
+        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+
+    // Compute payout using same formula as close_position
+    let payout_u128: u128 = if position.is_long {
+        // X_out = (x * y_pos - delta_k) / (y + y_pos)
+        let product_val = total_x
+            .checked_mul(position_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        let numerator = if product_val <= position.delta_k {
+            0u128
+        } else {
+            product_val
+                .checked_sub(position.delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?
+        };
+
+        let denominator = total_y
+            .checked_add(position_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        numerator
+            .checked_div(denominator)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+    } else {
+        // Y_out = (x_pos * y - delta_k) / (x + x_pos)
+        let product_val = position_size_u128
+            .checked_mul(total_y)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        let numerator = if product_val <= position.delta_k {
+            0u128
+        } else {
+            product_val
+                .checked_sub(position.delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?
+        };
+
+        let denominator = total_x
+            .checked_add(position_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        numerator
+            .checked_div(denominator)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+    };
+
+    // Liquidate if payout is less than or equal to collateral (i.e., no equity left)
     require!(
-        expected_output < borrowed_amount * 102u64 / 100u64, //2% fee buffer (incentivizes liquidation)
+        payout_u128 <= position.collateral as u128,
         WhiplashError::PositionNotLiquidatable
     );
     
@@ -161,8 +203,8 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         pool: ctx.accounts.pool.key(),
         position: ctx.accounts.position.key(),
         position_size,
-        borrowed_amount,
-        expected_output,
+        borrowed_amount: 0u64, // No borrowed amount used in the new condition
+        expected_output: 0u64, // No expected output used in the new condition
         liquidator_reward: 0, // No reward for now
         timestamp: Clock::get()?.unix_timestamp,
     });

@@ -55,4 +55,7 @@ pub enum WhiplashError {
 
     #[msg("Invalid leverage")]
     InvalidLeverage,
+
+    #[msg("Position cannot be closed (would require liquidation)")]
+    PositionNotClosable,
 } 

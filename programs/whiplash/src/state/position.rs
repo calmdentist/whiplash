@@ -27,6 +27,9 @@ pub struct Position {
     // The position size (output token amount)
     pub size: u64,
 
+    // The stored delta_k value needed to restore the pool invariant
+    pub delta_k: u128,
+
     // The position nonce (allows for multiple positions in same pool)
     pub nonce: u64,
 
