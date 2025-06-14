@@ -114,11 +114,11 @@ This property guarantees that the virtual reserves model remains solvent because
 
 \section{Leverage Trading Mechanism}
 
-Whiplash introduces a novel approach to leverage trading that modifies the constant product invariant temporarily while positions are open.
+Whiplash introduces a novel approach to leverage trading that modifies the constant product invariant temporarily while positions are open. To ensure protocol solvency, the change in the invariant is tracked and used to settle the position.
 
 \subsection{Opening a Leveraged Position}
 
-When a trader opens a leveraged position with leverage factor $L$:
+When a trader opens a leveraged position with collateral $c$ and leverage factor $L$:
 
 \begin{equation}
 \begin{aligned}
@@ -128,108 +128,92 @@ When a trader opens a leveraged position with leverage factor $L$:
 \end{aligned}
 \end{equation}
 
-The leverage trade is executed as if it were a spot trade with size $c \cdot L$, but the output tokens are stored in a position manager rather than sent to the user's wallet:
+The trade is executed as a spot trade of size $c \cdot L$, and the resulting tokens are stored in a position manager:
 
 \begin{equation}
 \begin{aligned}
-\Delta y &= \frac{y \cdot c \cdot L}{x + c \cdot L} \\
+\Delta y &= \frac{y_{\text{pre}} \cdot c \cdot L}{x_{\text{pre}} + c \cdot L} \\
 y_{\text{position}} &= \Delta y
 \end{aligned}
 \end{equation}
 
-This operation modifies the constant product value to:
+Opening the position alters the pool's reserves and its constant product, $k$. The user's collateral $c$ is added to the base asset reserve.
 
 \begin{equation}
-k_{\text{after\_leverage}} = (x + c) \cdot (y - \Delta y) < k_{\text{initial}}
+\begin{aligned}
+x_{\text{post}} &= x_{\text{pre}} + c \\
+y_{\text{post}} &= y_{\text{pre}} - \Delta y \\
+k_{\text{post}} &= x_{\text{post}} \cdot y_{\text{post}}
+\end{aligned}
 \end{equation}
 
-This reduction in $k$ is temporary and will be restored when the position is closed or liquidated.
+The deviation in the constant product, $\Delta k$, is calculated and stored with the position. This value is crucial for correctly closing the position later.
+
+\begin{equation}
+\Delta k = k_{\text{pre}} - k_{\text{post}} = (x_{\text{pre}} \cdot y_{\text{pre}}) - ((x_{\text{pre}} + c) \cdot (y_{\text{pre}} - \Delta y))
+\end{equation}
 
 \subsection{Mathematical Impact on Reserves}
 
-For a long position on the token, the pre and post reserves can be expressed as:
-
-\begin{equation}
-\begin{aligned}
-\text{Pre-trade:} \quad &x \cdot y = k \\
-\text{Post-trade:} \quad &(x + c) \cdot (y - \Delta y) = k_{\text{after\_leverage}} < k
-\end{aligned}
-\end{equation}
-
-The difference between the original $k$ and the reduced $k_{\text{after\_leverage}}$ represents the "borrowed" portion that must be repaid when the position is closed.
+For a long position, the reserves are modified as shown above. The stored $\Delta k$ represents the exact amount by which the pool's invariant must be adjusted when the position is closed to ensure the pool remains solvent and the user's profit or loss is correctly calculated.
 
 \section{Closing a Leveraged Position}
 
-When a trader closes a leveraged position, the protocol must ensure that the borrowed amount is repaid and the constant product $k$ is restored.
+When a trader closes a leveraged position, the protocol uses the stored $\Delta k$ to restore the invariant and calculate the final payout. This process ensures that the trader's PnL reflects market movements while keeping the AMM's core mathematics sound.
 
-\subsection{Successful Position Closure}
+\subsection{Position Closure Calculation}
 
-For a successful closure of a leverage position, the following conditions must be satisfied:
+To close a position, the user returns their $y_{\text{position}}$ tokens. The protocol calculates the base asset payout, $X_{\text{out}}$, by determining how many base assets must be paid out to restore the original constant product invariant, $k$. The payout is given by:
 
 \begin{equation}
-\begin{aligned}
-\text{Swapped output} &= \frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} \\
-\text{Borrowed amount} &= c \cdot (L - 1) \\
-\text{Condition:} \quad &\text{Swapped output} \geq \text{Borrowed amount}
-\end{aligned}
+X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}}
 \end{equation}
 
-When closing the position, the protocol:
-\begin{enumerate}
-    \item Swaps the position tokens back to the base asset
-    \item Deducts the borrowed amount from the output
-    \item Returns the remainder to the user
-    \item Restores the constant product $k$ to its original value
-\end{enumerate}
+Here, $x_{\text{current}}$ and $y_{\text{current}}$ are the pool's reserves at the time of closing. The term $x_{\text{current}} \cdot y_{\text{position}}$ represents the value of the position's tokens in terms of the base asset, adjusted for swap impact, from which the stored $\Delta k$ is subtracted to ensure the pool's invariant is restored.
 
-The mathematical representation of this process:
+This payout, $X_{\text{out}}$, includes the user's initial collateral plus any profits, or minus any losses. The user's Profit and Loss (PnL) on their initial collateral is:
 
 \begin{equation}
-\begin{aligned}
-\text{Output} &= \frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} \\
-\text{User receives} &= \text{Output} - c \cdot (L - 1) - \text{fees} \\
-\text{Post-closure:} \quad &x_{\text{new}} \cdot y_{\text{new}} = k
-\end{aligned}
+\text{PnL} = X_{\text{out}} - c
 \end{equation}
 
 \section{Liquidation Mechanism}
 
-The liquidation mechanism in Whiplash is designed to protect the protocol when leveraged positions become underwater.
+The liquidation mechanism protects the protocol by ensuring that underwater positions are closed before they generate bad debt. It relies on the same $\Delta k$ mechanic to settle positions.
 
 \subsection{Liquidation Condition}
 
-A position becomes eligible for liquidation when:
+A position is eligible for liquidation if and only if its value is exactly enough, or not enough, to restore the $\Delta k$ to the pool. This corresponds to the point where the trader's payout, $X_{\text{out}}$, would be zero or negative. A position must be liquidated when the trader's collateral is fully depleted.
+
+The liquidation condition is met when $X_{\text{out}} \le 0$. Using the formula for $X_{\text{out}}$:
 
 \begin{equation}
-\frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} < c \cdot (L - 1)
+\frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}} \le 0
 \end{equation}
 
-This indicates that the position can no longer be closed profitably as the output would be less than the borrowed amount.
+Since the denominator is always positive, this simplifies to a clear and elegant condition:
+
+\begin{equation}
+x_{\text{current}} \cdot y_{\text{position}} \le \Delta k
+\end{equation}
+
+This means a position is liquidatable when the value of the position's tokens (at the marginal price, $x_{\text{current}}$) is less than or equal to the stored $\Delta k$. At this point, all of the position's value is required to make the pool whole.
 
 \subsection{Liquidation Price}
 
-The liquidation price is the price at which swapping the position tokens outputs exactly the borrowed amount:
+The liquidation price is the AMM price ($P = x/y$) at which the liquidation condition is met. We can find this by substituting the price into the condition:
 
 \begin{equation}
-P_{\text{liquidation}} = \frac{c \cdot (L - 1)}{y_{\text{position}}}
+(P_{\text{liquidation}} \cdot y_{\text{current}}) \cdot y_{\text{position}} \le \Delta k
 \end{equation}
 
-This price represents the boundary between a position that can be closed and one that requires liquidation.
+Solving for the price is complex due to the interdependence of the variables. However, the core condition $x \cdot y_{\text{position}} \le \Delta k$ is what is checked by the protocol.
 
 \subsection{Liquidation Execution}
 
-The liquidation process can be modeled as a fixed price limit order:
+Any market participant can trigger the liquidation of an eligible position. The process executes the same logic as closing a position. When liquidated, $X_{\text{out}}$ is calculated. Since the position is at or below the liquidation threshold, $X_{\text{out}}$ will be zero or negative, meaning the trader loses their entire collateral, $c$.
 
-\begin{equation}
-\begin{aligned}
-\text{Required base asset} &= c \cdot (L - 1) \\
-\text{Liquidated tokens} &= y_{\text{position}} \\
-\text{Liquidation price} &= \frac{\text{Required base asset}}{\text{Liquidated tokens}}
-\end{aligned}
-\end{equation}
-
-Liquidations can be performed by any market participant when the AMM price crosses the liquidation price, creating arbitrage opportunities.
-When a position is liquidated, the SOL obtained from the liquidation is added back to the $x$ reserve, thereby restoring the constant product $k$ to its original value.
+A portion of the user's collateral is used to reward the liquidator, and the remainder may go to a protocol treasury. This ensures that liquidations are incentivized and the protocol remains solvent by restoring the invariant.
 
 \section{Limbo State}
 
@@ -237,24 +221,21 @@ A unique feature of Whiplash is the "limbo state" for positions that experience 
 
 \subsection{Mathematical Definition of Limbo}
 
-A position enters limbo when:
-
+A position enters limbo when it meets the liquidation condition but no liquidator has yet closed it:
 \begin{equation}
 \begin{aligned}
-&\frac{x \cdot y_{\text{position}}}{y + y_{\text{position}}} < c \cdot (L - 1) \\
+&x_{\text{current}} \cdot y_{\text{position}} \le \Delta k \\
 &\text{and no liquidator has fulfilled the liquidation}
 \end{aligned}
 \end{equation}
 
 \subsection{Exiting Limbo}
 
-A position can exit limbo if price movements cause the following condition to be met:
+A position can exit limbo if price movements cause its value to recover, such that it no longer meets the liquidation condition:
 
 \begin{equation}
-\frac{x_{\text{new}} \cdot y_{\text{position}}}{y_{\text{new}} + y_{\text{position}}} \geq c \cdot (L - 1)
+x_{\text{current}} \cdot y_{\text{position}} > \Delta k
 \end{equation}
-
-This mathematical condition allows for positions to recover from temporary price shocks rather than being forced into immediate liquidation, providing protection against flash crashes and manipulation.
 
 \section{System Properties and Guarantees}
 
