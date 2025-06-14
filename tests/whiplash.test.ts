@@ -1011,172 +1011,139 @@ describe("whiplash", () => {
     }
   });
   
-  // it("Creates a leveraged long position, makes it underwater, and liquidates it", async () => {
-  //   try {
-  //     // Generate a random nonce for this test position
-  //     const liquidationTestNonce = Math.floor(Math.random() * 1000000);
-  //     const liquidationTestNonceBytes = new BN(liquidationTestNonce).toArrayLike(Buffer, "le", 8);
-      
-  //     // Derive the position PDA
-  //     const [liquidationPositionPda, liquidationPositionBump] = await PublicKey.findProgramAddressSync(
-  //       [
-  //         Buffer.from("position"),
-  //         poolPda.toBuffer(),
-  //         wallet.publicKey.toBuffer(),
-  //         liquidationTestNonceBytes,
-  //       ],
-  //       program.programId
-  //     );
-      
-  //     // Calculate position token account address
-  //     const liquidationPositionTokenAccount = await getAssociatedTokenAddress(
-  //       tokenMint,
-  //       liquidationPositionPda,
-  //       true // allowOwnerOffCurve
-  //     );
-      
-  //     // Get initial pool state
-  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const initialPoolTokenAmount = initialPoolAccount.tokenYAmount.toNumber();
-  //     const initialPoolLamports = initialPoolAccount.lamports.toNumber();
-  //     const initialVirtualSolAmount = initialPoolAccount.virtualSolAmount.toNumber();
-  //     const initialTotalSol = initialVirtualSolAmount + initialPoolLamports;
-  //     const initialK = constantProduct(initialPoolAccount);
-      
-  //     console.log("Initial K:", initialK);
-      
-  //     // Use a high leverage to make liquidation easier
-  //     const HIGH_LEVERAGE = 90; // 9x leverage
-      
-  //     // Open a leveraged long position (SOL->Token)
-  //     const openTx = await program.methods
-  //       .leverageSwap(
-  //         new BN(SWAP_AMOUNT),              // amountIn (collateral)
-  //         new BN(0),                        // minAmountOut (0 for test simplicity)
-  //         HIGH_LEVERAGE,                    // leverage factor - high to be easily liquidated
-  //         new BN(liquidationTestNonce)      // nonce
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenYVault: tokenVault,
-  //         userTokenIn: wallet.publicKey,
-  //         userTokenOut: tokenAccount,
-  //         position: liquidationPositionPda,
-  //         positionTokenAccount: liquidationPositionTokenAccount,
-  //         positionTokenMint: tokenMint,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .rpc();
-        
-  //     await provider.connection.confirmTransaction(openTx);
-  //     console.log("Opened high-leverage long position for liquidation test");
-      
-  //     // Get position account data after opening
-  //     const positionAccount = await program.account.position.fetch(liquidationPositionPda);
-  //     console.log("Position size:", positionAccount.size.toNumber(), "tokens");
-  //     console.log("Position leverage:", positionAccount.leverage);
-      
-  //     // Calculate the borrowed amount
-  //     const borrowedAmount = SWAP_AMOUNT * (HIGH_LEVERAGE - 10) / 10;
-  //     console.log("Borrowed amount:", borrowedAmount / LAMPORTS_PER_SOL, "SOL");
-      
-  //     // Now make a large token sale to tank the price and make the position underwater
-  //     // First get user's current token balance
-  //     const userTokenAccountInfo = await getAccount(provider.connection, tokenAccount);
-  //     const userTokenBalance = Number(userTokenAccountInfo.amount);
-  //     console.log("User's available token balance:", userTokenBalance / 10**DECIMALS, "tokens");
-      
-  //     // Use a reasonable percentage of the user's balance to tank the price
-  //     const tokenSaleAmount = Math.min(positionAccount.size.toNumber() * 5, userTokenBalance * 0.8);
-  //     console.log("Performing token sale of", tokenSaleAmount / 10**DECIMALS, "tokens to tank price");
-      
-  //     const saleTx = await program.methods
-  //       .swap(
-  //         new BN(tokenSaleAmount),  // amountIn - large token sale
-  //         new BN(0)                 // minAmountOut - don't care about slippage for the test
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenYVault: tokenVault,
-  //         userTokenIn: tokenAccount,
-  //         userTokenOut: wallet.publicKey,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //       })
-  //       .rpc();
-      
-  //     await provider.connection.confirmTransaction(saleTx);
-  //     console.log("Completed large token sale to tank price");
-      
-  //     // Get intermediate pool state after the sale
-  //     const afterSalePoolAccount = await program.account.pool.fetch(poolPda);
-  //     const afterSaleK = constantProduct(afterSalePoolAccount);
-      
-  //     // Now liquidate the position
-  //     const liquidatorKeypair = Keypair.generate();
-  //     await provider.connection.confirmTransaction(
-  //       await provider.connection.requestAirdrop(
-  //         liquidatorKeypair.publicKey,
-  //         0.1 * LAMPORTS_PER_SOL
-  //       )
-  //     );
-      
-  //     const liquidateTx = await program.methods
-  //       .liquidate()
-  //       .accounts({
-  //         liquidator: liquidatorKeypair.publicKey,
-  //         positionOwner: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenYVault: tokenVault,
-  //         position: liquidationPositionPda,
-  //         positionTokenAccount: liquidationPositionTokenAccount,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .signers([liquidatorKeypair])
-  //       .rpc();
-      
-  //     await provider.connection.confirmTransaction(liquidateTx);
-  //     console.log("Liquidated the underwater position");
-      
-  //     // Get final pool state
-  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const finalPoolTokenAmount = finalPoolAccount.tokenYAmount.toNumber();
-  //     const finalPoolLamports = finalPoolAccount.lamports.toNumber();
-  //     const finalVirtualSolAmount = finalPoolAccount.virtualSolAmount.toNumber();
-  //     const finalTotalSol = finalVirtualSolAmount + finalPoolLamports;
-  //     const finalK = constantProduct(finalPoolAccount);
-      
-  //     console.log("After Sale K:", afterSaleK);
-  //     console.log("Final K:", finalK);
-      
-  //     // Verify K increased from after sale state to final state
-  //     expect(scaled(finalK)).to.be.greaterThan(scaled(afterSaleK));
-      
-  //     // Verify that SOL reserve increased after liquidation
-  //     expect(finalPoolLamports).to.be.greaterThanOrEqual(initialPoolLamports);
-      
-  //     // Verify that token reserve increased after liquidation
-  //     expect(finalPoolTokenAmount).to.be.greaterThanOrEqual(initialPoolTokenAmount);
-      
-  //     // Try to verify that the position no longer exists
-  //     let positionStillExists = true;
-  //     try {
-  //       await program.account.position.fetch(liquidationPositionPda);
-  //     } catch (error) {
-  //       positionStillExists = false;
-  //     }
-  //     expect(positionStillExists).to.be.false;
-  //   } catch (error) {
-  //     console.error("Liquidation Test Error:", error);
-  //     throw error;
-  //   }
-  // });
+  it("Opens a leveraged long, spot buys to raise price, then closes long and sells tokens, restoring pool state", async () => {
+    try {
+      // Record initial pool K value
+      const initialPoolAccount = await program.account.pool.fetch(poolPda);
+      const initialK = constantProduct(initialPoolAccount);
+      console.log("Initial K before strategy:", initialK.toString());
+
+      // --- Step 1: Open a leveraged long position (SOL -> Token) ---
+      const stratNonce = Math.floor(Math.random() * 1000000);
+      const stratNonceBytes = new BN(stratNonce).toArrayLike(Buffer, "le", 8);
+
+      // Derive PDA + token account for the position
+      const [stratPositionPda, _stratBump] = await PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("position"),
+          poolPda.toBuffer(),
+          wallet.publicKey.toBuffer(),
+          stratNonceBytes,
+        ],
+        program.programId
+      );
+
+      const stratPositionTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        stratPositionPda,
+        true // allowOwnerOffCurve
+      );
+
+      const openTx = await program.methods
+        .leverageSwap(
+          new BN(SWAP_AMOUNT),   // collateral SOL in lamports
+          new BN(0),             // accept any token output for simplicity
+          LEVERAGE,              // leverage factor
+          new BN(stratNonce)     // nonce
+        )
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: wallet.publicKey,
+          userTokenOut: tokenAccount,
+          position: stratPositionPda,
+          positionTokenAccount: stratPositionTokenAccount,
+          positionTokenMint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(openTx);
+      console.log("Opened leveraged long position (tx)", openTx);
+
+      // --- Step 2: Perform a spot buy (SOL -> Token) to push price up ---
+      const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
+      const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
+
+      const spotBuyTx = await program.methods
+        .swap(
+          new BN(SWAP_AMOUNT), // spend same SOL amount for spot buy
+          new BN(0)            // accept any output
+        )
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: wallet.publicKey,
+          userTokenOut: tokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(spotBuyTx);
+      console.log("Executed spot buy (tx)", spotBuyTx);
+
+      const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
+      const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
+      const spotTokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
+      console.log("Spot tokens obtained:", spotTokensObtained);
+
+      // --- Step 3: Close the leveraged long position ---
+      const closeLongTx = await program.methods
+        .closePosition()
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          position: stratPositionPda,
+          positionTokenAccount: stratPositionTokenAccount,
+          userTokenOut: wallet.publicKey, // SOL back to user for long
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(closeLongTx);
+      console.log("Closed leveraged long position (tx)", closeLongTx);
+
+      // --- Step 4: Sell the tokens acquired in the spot buy (Token -> SOL) ---
+      if (spotTokensObtained > 0) {
+        const sellTx = await program.methods
+          .swap(
+            new BN(spotTokensObtained), // sell exact tokens obtained
+            new BN(0)                   // accept any SOL output
+          )
+          .accounts({
+            user: wallet.publicKey,
+            pool: poolPda,
+            tokenYVault: tokenVault,
+            userTokenIn: tokenAccount,
+            userTokenOut: wallet.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        await provider.connection.confirmTransaction(sellTx);
+        console.log("Sold tokens from spot buy (tx)", sellTx);
+      }
+
+      // --- Final pool K value ---
+      const finalPoolAccount = await program.account.pool.fetch(poolPda);
+      const finalK = constantProduct(finalPoolAccount);
+      console.log("Final K after strategy:", finalK.toString());
+
+      // Verify K restored within tolerance
+      const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
+      const kDiffPercentage = kDiff / scaled(initialK);
+      console.log("K difference percentage:", kDiffPercentage * 100, "%");
+      expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance
+    } catch (error) {
+      console.error("Leverage strategy test Error:", error);
+      throw error;
+    }
+  });
 }); 
