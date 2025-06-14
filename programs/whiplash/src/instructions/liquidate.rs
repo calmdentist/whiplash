@@ -127,11 +127,11 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             .ok_or(error!(WhiplashError::MathOverflow))?
     };
 
-    // Liquidate if payout is less than or equal to collateral (i.e., no equity left)
-    require!(
-        payout_u128 <= position.collateral as u128,
-        WhiplashError::PositionNotLiquidatable
-    );
+    // A position is only liquidatable when the stored Δk can be fully restored –
+    // i.e. when the traderʼs payout is exactly zero (or 1 lamport of rounding).
+    // If x_current * y_pos  <  Δk the position is in the "limbo" state and must
+    // NOT be liquidated yet.
+    require!(payout_u128 == 0u128, WhiplashError::PositionNotLiquidatable);
     
     // If we get here, the position is eligible for liquidation
     // Handle based on position type

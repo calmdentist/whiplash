@@ -230,6 +230,23 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
                 .ok_or(error!(WhiplashError::MathOverflow))?;
         }
         
+        // 1.5. Record rent lamports that will be sent to the pool when the position token
+        //      account is closed. We add them to the pool state now so that the bookkeeping
+        //      matches the real lamport transfer that the SPL-Token program will perform in
+        //      `token::close_account` below.
+        let position_acct_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
+        require!(position_acct_lamports >= position_size, WhiplashError::InsufficientFunds);
+        let rent_lamports = position_acct_lamports
+            .checked_sub(position_size)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        if rent_lamports > 0 {
+            let pool = &mut ctx.accounts.pool;
+            pool.lamports = pool.lamports
+                .checked_add(rent_lamports)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+        }
+        
         // 2. Transfer tokens from vault to user
         let pool_seeds = &[
             b"pool".as_ref(),
@@ -282,13 +299,13 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         ];
         let position_signer = &[&position_seeds[..]];
         
-        // Close the token account and send rent to user
+        // Close the token account and send rent to pool
         token::close_account(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 token::CloseAccount {
                     account: ctx.accounts.position_token_account.to_account_info(),
-                    destination: ctx.accounts.user.to_account_info(),
+                    destination: ctx.accounts.pool.to_account_info(),
                     authority: ctx.accounts.position.to_account_info(),
                 },
                 position_signer,
