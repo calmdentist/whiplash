@@ -1146,4 +1146,157 @@ describe("whiplash", () => {
       throw error;
     }
   });
+
+  it("Liquidates an underwater leveraged long position", async () => {
+    try {
+      // ------------------------------------------------------------
+      // Step 0: Ensure wallet has plenty of SOL for the test
+      // ------------------------------------------------------------
+      await provider.connection.confirmTransaction(
+        await provider.connection.requestAirdrop(
+          wallet.publicKey,
+          60 * LAMPORTS_PER_SOL // 60 SOL airdrop
+        )
+      );
+
+      // ------------------------------------------------------------
+      // Step 1: Big spot buy (SOL -> Token) to move price up
+      // ------------------------------------------------------------
+      const BIG_BUY_SOL = 200 * LAMPORTS_PER_SOL; // spend 200 SOL for deeper liquidity impact
+
+      const bigBuyTx = await program.methods
+        .swap(new BN(BIG_BUY_SOL), new BN(0))
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: wallet.publicKey,
+          userTokenOut: tokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(bigBuyTx);
+      console.log("Executed big spot buy (tx)", bigBuyTx);
+
+      // ------------------------------------------------------------
+      // Step 2: Open a 5x leveraged long position at the higher price
+      // ------------------------------------------------------------
+      const LIQUIDATION_TEST_COLLATERAL = 2 * LAMPORTS_PER_SOL; // 2 SOL collateral
+      const liquidationTestNonce = Math.floor(Math.random() * 1_000_000);
+      const liquidationNonceBytes = new BN(liquidationTestNonce).toArrayLike(Buffer, "le", 8);
+
+      const [liqPositionPda, _liqBump] = await PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("position"),
+          poolPda.toBuffer(),
+          wallet.publicKey.toBuffer(),
+          liquidationNonceBytes,
+        ],
+        program.programId
+      );
+
+      const liqPositionTokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        liqPositionPda,
+        true // allowOwnerOffCurve
+      );
+
+      const openLiqPosTx = await program.methods
+        .leverageSwap(
+          new BN(LIQUIDATION_TEST_COLLATERAL),
+          new BN(0), // accept any amount out
+          LEVERAGE,
+          new BN(liquidationTestNonce)
+        )
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: wallet.publicKey,
+          userTokenOut: tokenAccount,
+          position: liqPositionPda,
+          positionTokenAccount: liqPositionTokenAccount,
+          positionTokenMint: tokenMint,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(openLiqPosTx);
+      console.log("Opened leveraged long position (tx)", openLiqPosTx);
+
+      // Helper no longer needed; we will attempt liquidation directly each loop
+       
+      let attempts = 0;
+      const MAX_ATTEMPTS = 30;
+
+      while (attempts < MAX_ATTEMPTS) {
+        attempts += 1;
+
+        // Attempt liquidation each iteration
+        try {
+          const tx = await program.methods
+            .liquidate()
+            .accounts({
+              liquidator: wallet.publicKey,
+              positionOwner: wallet.publicKey,
+              pool: poolPda,
+              tokenYVault: tokenVault,
+              position: liqPositionPda,
+              positionTokenAccount: liqPositionTokenAccount,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+              rent: SYSVAR_RENT_PUBKEY,
+            })
+            .rpc();
+          await provider.connection.confirmTransaction(tx);
+          console.log(`Liquidated position on attempt ${attempts} (tx)`, tx);
+          break;
+        } catch (err) {
+          // Liquidation failed – likely not yet eligible; sell tokens to lower price
+          const userTokenAccInfo = await getAccount(provider.connection, tokenAccount);
+          const userTokenBal = BigInt(userTokenAccInfo.amount.toString());
+          if (userTokenBal === BigInt(0)) {
+            console.log("No tokens left to sell; cannot lower price further");
+            break; // exit loop; will cause assertion fail below
+          }
+          let sellAmount = userTokenBal * BigInt(9) / BigInt(10); // sell 90% each iteration
+          if (sellAmount === BigInt(0)) {
+            console.log("Calculated sellAmount is zero; stopping to avoid ZeroSwapAmount error");
+            break;
+          }
+          const sellTx = await program.methods
+            .swap(new BN(sellAmount.toString()), new BN(0))
+            .accounts({
+              user: wallet.publicKey,
+              pool: poolPda,
+              tokenYVault: tokenVault,
+              userTokenIn: tokenAccount,
+              userTokenOut: wallet.publicKey,
+              tokenProgram: TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .rpc();
+          await provider.connection.confirmTransaction(sellTx);
+          console.log(`Attempt ${attempts}: sold ${sellAmount} tokens (tx)`, sellTx);
+        }
+      }
+
+      // Ensure we actually liquidated
+      let positionStillExists = true;
+      try {
+        await program.account.position.fetch(liqPositionPda);
+        positionStillExists = true;
+      } catch (_) {
+        positionStillExists = false;
+      }
+      expect(positionStillExists).to.be.false;
+    } catch (error) {
+      console.error("Liquidation test error:", error);
+      throw error;
+    }
+  });
 }); 

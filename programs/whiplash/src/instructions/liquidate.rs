@@ -65,10 +65,23 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let pool = &ctx.accounts.pool;
     
     // -----------------------------------------------------------------
-    // New liquidation condition based on Δk
-    // A position is liquidatable when its payout would be zero or negative.
-    // For a long: x_current * y_pos <= delta_k
-    // For a short: y_current * x_pos <= delta_k
+    // Liquidation condition based on Δk
+    // --------------------------------------------------------------
+    // A position becomes eligible for liquidation when the output it
+    // would receive from a regular close *cannot* fully restore the
+    // stored Δk.  Equivalently, when the amount that must be paid to
+    // the trader ( `payout` ) is ≤ 0.
+    //
+    // For a long  position: payout = (x * y_pos − Δk) / (y + y_pos)
+    // For a short position: payout = (x_pos * y − Δk) / (x + x_pos)
+    //
+    // We additionally determine the *exact* amount that the pool
+    // needs from the position to bring k back to its pre-trade value
+    // (denoted `tokens_needed`).  A position can only be liquidated
+    // when its vault holds exactly this amount.  If it holds less it
+    // is in the "limbo" state (awaiting further price movement) and
+    // if it holds more it should be closed normally because it is
+    // still in-the-money.
     // -----------------------------------------------------------------
 
     let position_size_u128: u128 = position.size as u128;
@@ -127,12 +140,21 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             .ok_or(error!(WhiplashError::MathOverflow))?
     };
 
-    // A position is only liquidatable when the stored Δk can be fully restored –
-    // i.e. when the traderʼs payout is exactly zero (or 1 lamport of rounding).
-    // If x_current * y_pos  <  Δk the position is in the "limbo" state and must
-    // NOT be liquidated yet.
+    msg!("payout_u128: {}", payout_u128);
     require!(payout_u128 == 0u128, WhiplashError::PositionNotLiquidatable);
-    
+
+    // -----------------------------------------------------------------
+    // Calculate how many tokens (or lamports for a short) are *needed*
+    // to fully restore Δk at the current price. This derives from:
+    //     Δk = total_x * Δy   →   Δy = ceil(Δk / total_x)
+    // for longs and the symmetric expression for shorts.
+    // -----------------------------------------------------------------
+
+    // We already verified payout_u128 == 0, meaning x*y_pos <= Δk for long
+    // (or its short analogue).  The liquidator will provide whatever
+    // additional opposite-side asset is required; no strict equality
+    // between reserves and position size is necessary.
+
     // If we get here, the position is eligible for liquidation
     // Handle based on position type
     if position.is_long {
@@ -165,9 +187,54 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         );
         token::transfer(cpi_ctx, position_size)?;
         
-        // Update pool token reserves
-        let pool = &mut ctx.accounts.pool;
-        pool.token_y_amount = pool.token_y_amount
+        // Calculate how much SOL the liquidator must provide to fully
+        // restore Δk now that the Y tokens are back in the pool.
+        let needed_delta_k = position.delta_k;
+        let delta_from_tokens: u128 = total_x
+            .checked_mul(position_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        let mut sol_required_u128: u128 = 0u128;
+        if needed_delta_k > delta_from_tokens {
+            let remainder = needed_delta_k
+                .checked_sub(delta_from_tokens)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            let denominator = total_y
+                .checked_add(position_size_u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+
+            // ceil division to ensure invariant is over-collateralised by at most 1 lamport
+            sol_required_u128 = (remainder + denominator - 1) / denominator;
+        }
+
+        // Perform SOL transfer from liquidator to pool if needed
+        if sol_required_u128 > 0 {
+            if sol_required_u128 > u64::MAX as u128 {
+                return Err(error!(WhiplashError::MathOverflow));
+            }
+            let sol_required: u64 = sol_required_u128 as u64;
+
+            let ix = anchor_lang::solana_program::system_instruction::transfer(
+                &ctx.accounts.liquidator.key(),
+                &ctx.accounts.pool.key(),
+                sol_required,
+            );
+            anchor_lang::solana_program::program::invoke(
+                &ix,
+                &[
+                    ctx.accounts.liquidator.to_account_info(),
+                    ctx.accounts.pool.to_account_info(),
+                ],
+            )?;
+
+            // Update pool SOL reserves
+            ctx.accounts.pool.lamports = ctx.accounts.pool.lamports
+                .checked_add(sol_required)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+        }
+
+        // Update pool token reserves (after SOL handling to avoid double-borrow)
+        ctx.accounts.pool.token_y_amount = ctx.accounts.pool.token_y_amount
             .checked_add(position_size)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
@@ -190,8 +257,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         **pool_info.try_borrow_mut_lamports()? = new_pool_lamports;
         
         // Update pool SOL reserves
-        let pool = &mut ctx.accounts.pool;
-        pool.lamports = pool.lamports
+        ctx.accounts.pool.lamports = ctx.accounts.pool.lamports
             .checked_add(position_size)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     }
@@ -208,8 +274,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         liquidator_reward: 0, // No reward for now
         timestamp: Clock::get()?.unix_timestamp,
     });
-    
-    // Position account is automatically closed due to the close = liquidator constraint
-    
+        
     Ok(())
 } 

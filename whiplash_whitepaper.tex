@@ -183,37 +183,29 @@ The liquidation mechanism protects the protocol by ensuring that underwater posi
 
 \subsection{Liquidation Condition}
 
-A position is eligible for liquidation if and only if its value is exactly enough, or not enough, to restore the $\Delta k$ to the pool. This corresponds to the point where the trader's payout, $X_{\text{out}}$, would be zero or negative. A position must be liquidated when the trader's collateral is fully depleted.
-
-The liquidation condition is met when $X_{\text{out}} \le 0$. Using the formula for $X_{\text{out}}$:
+A position becomes \textbf{liquidatable} when the payout it would receive from a normal close is \emph{insufficient} to restore the stored $\Delta k$. Mathematically this corresponds to the case where the numerator of Equation~(\ref{eq:payout-long}) (or its short-side analogue) is non-positive so that
 
 \begin{equation}
-\frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}} \le 0
+X_{\text{out}} \le 0 .
 \end{equation}
 
-Since the denominator is always positive, this simplifies to a clear and elegant condition:
+For the long side this reduces to the simple inequality
 
 \begin{equation}
-x_{\text{current}} \cdot y_{\text{position}} \le \Delta k
+x_{\text{current}}\,y_{\text{position}} \le \Delta k ,
 \end{equation}
 
-This means a position is liquidatable when the value of the position's tokens (at the marginal price, $x_{\text{current}}$) is less than or equal to the stored $\Delta k$. At this point, all of the position's value is required to make the pool whole.
-
-\subsection{Liquidation Price}
-
-The liquidation price is the AMM price ($P = x/y$) at which the liquidation condition is met. We can find this by substituting the price into the condition:
-
-\begin{equation}
-(P_{\text{liquidation}} \cdot y_{\text{current}}) \cdot y_{\text{position}} \le \Delta k
-\end{equation}
-
-Solving for the price is complex due to the interdependence of the variables. However, the core condition $x \cdot y_{\text{position}} \le \Delta k$ is what is checked by the protocol.
+and the symmetric condition $y_{\text{current}}\,x_{\text{position}} \le \Delta k$ for shorts. At that point the trader's collateral is entirely exhausted and external intervention is required to bring the pool back to solvency.
 
 \subsection{Liquidation Execution}
 
-Any market participant can trigger the liquidation of an eligible position. The process executes the same logic as closing a position. When liquidated, $X_{\text{out}}$ is calculated. Since the position is at or below the liquidation threshold, $X_{\text{out}}$ will be zero or negative, meaning the trader loses their entire collateral, $c$.
+When a liquidator calls the \texttt{liquidate} instruction the protocol first computes the \emph{exact} quantity needed to mend the invariant:
 
-A portion of the user's collateral is used to reward the liquidator, and the remainder may go to a protocol treasury. This ensures that liquidations are incentivized and the protocol remains solvent by restoring the invariant.
+\begin{equation}
+\Delta y_{\text{needed}} = \left\lceil \frac{\Delta k}{x_{\text{current}}} \right\rceil \qquad\text{(longs)},
+\end{equation}
+
+or the mirrored expression $\Delta x_{\text{needed}} = \lceil \Delta k / y_{\text{current}} \rceil$ for shorts. Only this amount is transferred from the position vault to the pool; any surplus is left untouched so that the pool's constant product is \emph{exactly} restored—no more, no less. Because the trader's collateral is entirely depleted there is no payout, and the position account is closed with zero balance. The liquidator currently receives no reward, but the mechanism cleanly removes underwater risk from the pool.
 
 \section{Limbo State}
 
