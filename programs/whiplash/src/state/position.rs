@@ -30,6 +30,9 @@ pub struct Position {
     // The stored delta_k value needed to restore the pool invariant
     pub delta_k: u128,
 
+    // The leveraged token amount (output amount - collateral output amount)
+    pub leveraged_token_amount: u64,
+
     // The position nonce (allows for multiple positions in same pool)
     pub nonce: u64,
 

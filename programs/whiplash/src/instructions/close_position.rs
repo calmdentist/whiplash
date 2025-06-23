@@ -196,6 +196,8 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             pool.lamports = pool.lamports
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+            pool.leveraged_token_y_amount -= position.leveraged_token_amount;
         }
         
         // 3. Transfer SOL to user (direct lamport transfer)
@@ -228,6 +230,8 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             pool.token_y_amount = pool.token_y_amount
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
+
+            pool.leveraged_sol_amount -= position.leveraged_token_amount;
         }
         
         // 1.5. Record rent lamports that will be sent to the pool when the position token

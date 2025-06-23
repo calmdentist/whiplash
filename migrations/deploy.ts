@@ -104,7 +104,7 @@ async function main() {
 
     // Launch SHIB token
     console.log("Launching SHIB token...");
-    const virtualSolReserve = new anchor.BN(1000000000); // 1 SOL in lamports
+    const virtualSolReserve = new anchor.BN(100000000000); // 100 SOL in lamports
     const tokenName = "SHIBA INU";
     const tokenTicker = "SHIB";
     const metadataUri = "https://ipfs.io/ipfs/QmVySXmdq9qNG7H98tW5v8KTSUqPsLBYfo3EaKgR2shJex";

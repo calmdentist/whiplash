@@ -120,6 +120,15 @@ pub fn handle_leverage_swap(
     } else {
         ctx.accounts.pool.calculate_swap_y_to_x(amount_in * leverage as u64 / 10)?
     };
+
+    let base_amount_out = if is_sol_to_y {
+        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
+    } else {
+        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
+    };
+
+    let leveraged_amount_out = amount_out - base_amount_out;
+    msg!("leveraged_amount_out: {}", leveraged_amount_out);
     
     // -----------------------------------------------------------------
     // Calculate and store Δk (delta_k)
@@ -250,6 +259,7 @@ pub fn handle_leverage_swap(
     position.leverage = leverage;
     position.size = amount_out;
     position.delta_k = delta_k;
+    position.leveraged_token_amount = leveraged_amount_out;
     position.nonce = nonce;
     
     // Calculate entry price (simple estimation as average price) as Q64.64 u128
@@ -263,11 +273,15 @@ pub fn handle_leverage_swap(
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
+        pool.leveraged_token_y_amount = pool.leveraged_token_y_amount.checked_add(leveraged_amount_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
         pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.lamports = pool.lamports.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
+        pool.leveraged_sol_amount = pool.leveraged_sol_amount.checked_add(leveraged_amount_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
     }
     
     // Emit swap event

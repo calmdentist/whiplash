@@ -23,6 +23,12 @@ pub struct Pool {
 
     // Virtual SOL reserves
     pub virtual_sol_amount: u64,
+
+    // Leveraged token Y reserves
+    pub leveraged_token_y_amount: u64,
+
+    // Leveraged SOL reserves
+    pub leveraged_sol_amount: u64,
     
     // Bump seed for PDA derivation
     pub bump: u8,
@@ -38,6 +44,8 @@ impl Pool {
         
         // Check if total reserves (real + virtual) are sufficient
         let total_x = self.lamports.checked_add(self.virtual_sol_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_add(self.leveraged_sol_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         let total_y = self.token_y_amount.checked_add(self.virtual_token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
@@ -93,6 +101,8 @@ impl Pool {
         let total_x = self.lamports.checked_add(self.virtual_sol_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         let total_y = self.token_y_amount.checked_add(self.virtual_token_y_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_add(self.leveraged_token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         if total_x == 0 || total_y == 0 {
