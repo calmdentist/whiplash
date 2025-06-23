@@ -79,215 +79,166 @@ pub fn handle_leverage_swap(
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
 
-    // Validate leverage
+    // Validate leverage (expressed as multiplier scaled by 10, e.g. 25 = 2.5x)
     require!(
-        leverage >= 10 && leverage <= 100,
+        leverage >= 10 && leverage <= 100, // 1x to 10x leverage
         WhiplashError::InvalidLeverage
     );
     
-    // Check if token in is SOL based on the owner of the account
-    // If the owner is the System Program, it's a native SOL account
-    let is_sol_to_y = ctx.accounts.user_token_in.owner == &anchor_lang::solana_program::system_program::ID;
+    // -----------------------------------------------------------------
+    // Determine side (long/short) and perform the SPOT leg
+    // -----------------------------------------------------------------
+    // Native SOL accounts are owned by system program.  If the `in` account is
+    // owned by `SystemProgram`, the user is depositing SOL and therefore
+    // opening a LONG.  Otherwise the user is depositing token-Y and opening a
+    // SHORT.
+    let is_long = ctx.accounts.user_token_in.owner == &anchor_lang::solana_program::system_program::ID;
     
-    // Validate token accounts
-    if is_sol_to_y {
-        // For SOL->Token leverage, validate that position_token_mint is token Y
-        require!(
-            ctx.accounts.position_token_mint.key() == ctx.accounts.pool.token_y_mint,
-            WhiplashError::InvalidTokenAccounts
-        );
+    // For convenience grab mutable references we will update later.
+    let pool = &mut ctx.accounts.pool;
+    let token_program = ctx.accounts.token_program.to_account_info();
+
+    // ---------- Spot quote ----------
+    let spot_out: u64 = if is_long {
+        pool.calculate_swap_x_to_y(amount_in)?
     } else {
-        // For Token->SOL leverage, validate that user_token_in is a token Y account
-        let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
-        require!(
-            user_token_in_account.mint == ctx.accounts.pool.token_y_mint,
-            WhiplashError::InvalidTokenAccounts
-        );
-        require!(
-            user_token_in_account.owner == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
-        );
-        // For a Token->SOL leverage, verify the user_token_out is the user's wallet
-        require!(
-            ctx.accounts.user_token_out.key() == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
-        );
+        pool.calculate_swap_y_to_x(amount_in)?
+    };
+
+    // Total exposure after borrowing (leverage is scaled by 10)
+    let total_out_u128 = (spot_out as u128)
+        .checked_mul(leverage as u128)
+        .ok_or(error!(WhiplashError::MathOverflow))?
+        .checked_div(10)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+    
+    if total_out_u128 > u64::MAX as u128 {
+        return Err(error!(WhiplashError::MathOverflow));
     }
-    
-    // Calculate the output amount based on the constant product formula
-    let amount_out = if is_sol_to_y {
-        ctx.accounts.pool.calculate_swap_x_to_y(amount_in * leverage as u64 / 10)?
-    } else {
-        ctx.accounts.pool.calculate_swap_y_to_x(amount_in * leverage as u64 / 10)?
-    };
-    
-    // -----------------------------------------------------------------
-    // Calculate and store Δk (delta_k)
-    // -----------------------------------------------------------------
-    let pool_before = &ctx.accounts.pool;
+    let total_out = total_out_u128 as u64;
 
-    // Total reserves before the swap (real + virtual)
-    let total_x_before: u128 = pool_before.lamports
-        .checked_add(pool_before.virtual_sol_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
-    let total_y_before: u128 = pool_before.token_y_amount
-        .checked_add(pool_before.virtual_token_y_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
-
-    // Reserves after the swap (but before we mutate pool state)
-    let (total_x_after, total_y_after): (u128, u128) = if is_sol_to_y {
-        // Long position: user deposits SOL (amount_in) and takes Y (amount_out)
-        (
-            total_x_before
-                .checked_add(amount_in as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?,
-            total_y_before
-                .checked_sub(amount_out as u128)
-                .ok_or(error!(WhiplashError::MathUnderflow))?,
-        )
-    } else {
-        // Short position: user deposits Y (amount_in) and takes SOL (amount_out)
-        (
-            total_x_before
-                .checked_sub(amount_out as u128)
-                .ok_or(error!(WhiplashError::MathUnderflow))?,
-            total_y_before
-                .checked_add(amount_in as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?,
-        )
-    };
-
-    let k_before = total_x_before
-        .checked_mul(total_y_before)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    let k_after = total_x_after
-        .checked_mul(total_y_after)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-
-    let delta_k = k_before
-        .checked_sub(k_after)
+    let borrow_out: u64 = total_out.checked_sub(spot_out)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
-    
-    // Check minimum output amount
-    require!(
-        amount_out >= min_amount_out,
-        WhiplashError::SlippageToleranceExceeded
-    );
-    
-    // Handle token transfers
-    if is_sol_to_y {
-        // Transfer SOL from user to pool
+
+    // slippage check against user requirement (applies to total received)
+    require!(total_out >= min_amount_out, WhiplashError::SlippageToleranceExceeded);
+
+    // -----------------------------------------------------------------
+    // Token movements – SPOT leg
+    // -----------------------------------------------------------------
+    if is_long {
+        // User sends SOL -> pool, receives token-Y
+        // 1) transfer SOL collateral to pool PDA
         let ix = anchor_lang::solana_program::system_instruction::transfer(
             &ctx.accounts.user.key(),
-            &ctx.accounts.pool.key(),
+            &pool.key(),
             amount_in,
         );
         anchor_lang::solana_program::program::invoke(
             &ix,
-            &[
-                ctx.accounts.user.to_account_info(),
-                ctx.accounts.pool.to_account_info(),
-            ],
+            &[ctx.accounts.user.to_account_info(), pool.to_account_info()],
         )?;
 
-        // Transfer token Y from vault to position token account
-        let pool_signer_seeds = &[
-            b"pool".as_ref(),
-            ctx.accounts.pool.token_y_mint.as_ref(),
-            &[ctx.accounts.pool.bump],
-        ];
+        // Check for sufficient liquidity BEFORE transfer
+        require!(
+            pool.token_y_amount >= total_out,
+            WhiplashError::InsufficientLiquidity
+        );
+
+        // 2) transfer `total_out` tokens from vault to position token account
+        let pool_signer_seeds = &[b"pool".as_ref(), pool.token_y_mint.as_ref(), &[pool.bump]];
         let pool_signer = &[&pool_signer_seeds[..]];
-        
-        let cpi_accounts_out = Transfer {
-            from: ctx.accounts.token_y_vault.to_account_info(),
-            to: ctx.accounts.position_token_account.to_account_info(),
-            authority: ctx.accounts.pool.to_account_info(),
-        };
-        let cpi_ctx_out = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts_out,
-            pool_signer,
-        );
-        token::transfer(cpi_ctx_out, amount_out)?;
-    } else {
-        // Transfer token Y from user to vault
-        let cpi_accounts_in = Transfer {
-            from: ctx.accounts.user_token_in.to_account_info(),
-            to: ctx.accounts.token_y_vault.to_account_info(),
-            authority: ctx.accounts.user.to_account_info(),
-        };
-        let cpi_ctx_in = CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts_in,
-        );
-        token::transfer(cpi_ctx_in, amount_in)?;
-        
-        // For a short position, we're transferring SOL to the position
-        // Make sure the position_token_account is used as the destination
-        // This account must be able to receive SOL (not be a token account)
-        // Use direct lamport transfer instead of system program transfer
-        let pool_lamports = ctx.accounts.pool.to_account_info().lamports();
-        let position_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-        
-        // Calculate new lamport values
-        let new_pool_lamports = pool_lamports.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-        let new_position_lamports = position_lamports.checked_add(amount_out)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-        
-        // Update lamports
-        **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = new_pool_lamports;
-        **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = new_position_lamports;
-    }
-    
-    // Initialize position data
-    let position = &mut ctx.accounts.position;
-    position.authority = ctx.accounts.user.key();
-    position.pool = ctx.accounts.pool.key();
-    position.position_vault = ctx.accounts.position_token_account.key();
-    position.is_long = is_sol_to_y; // long if SOL to Y, short if Y to SOL
-    position.collateral = amount_in;
-    position.leverage = leverage;
-    position.size = amount_out;
-    position.delta_k = delta_k;
-    position.nonce = nonce;
-    
-    // Calculate entry price (simple estimation as average price) as Q64.64 u128
-    let entry_price = ((amount_in as u128 * leverage as u128) << 64) / ((amount_out as u128) << 64);
-    position.entry_price = entry_price;
-    
-    // Update pool reserves
-    let pool = &mut ctx.accounts.pool;
-    if is_sol_to_y {
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program.clone(),
+                Transfer {
+                    from: ctx.accounts.token_y_vault.to_account_info(),
+                    to: ctx.accounts.position_token_account.to_account_info(),
+                    authority: pool.to_account_info(),
+                },
+                pool_signer,
+            ),
+            total_out,
+        )?;
+
+        // Real-reserve bookkeeping
         pool.lamports = pool.lamports.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
+        pool.token_y_amount = pool.token_y_amount.checked_sub(total_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // Virtual reserve update (mirror the borrowed share)
+        pool.virtual_token_y_amount = pool.virtual_token_y_amount.checked_add(borrow_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
+        // SHORT: user deposits token-Y, receives SOL
+        // 1) Transfer token-Y collateral into the vault
+        token::transfer(
+            CpiContext::new(
+                token_program.clone(),
+                Transfer {
+                    from: ctx.accounts.user_token_in.to_account_info(),
+                    to: ctx.accounts.token_y_vault.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                },
+            ),
+            amount_in,
+        )?;
+
+        // 2) Transfer `total_out` lamports (SOL) from pool to position token account
+        let pool_lamports = pool.to_account_info().lamports();
+        require!(pool_lamports >= total_out, WhiplashError::InsufficientLiquidity);
+        
+        // The `position` PDA will hold the SOL proceeds for a short.
+        let dest_info = ctx.accounts.position.to_account_info();
+        **pool.to_account_info().try_borrow_mut_lamports()? = pool_lamports.checked_sub(total_out)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+        **dest_info.try_borrow_mut_lamports()? = dest_info.lamports().checked_add(total_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        // Real-reserve bookkeeping
         pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.lamports = pool.lamports.checked_sub(amount_out)
+        pool.lamports = pool.lamports.checked_sub(total_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // Virtual reserve update for borrowed SOL
+        pool.virtual_sol_amount = pool.virtual_sol_amount.checked_add(borrow_out)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
     }
-    
-    // Emit swap event
+
+    // -----------------------------------------------------------------
+    // Record position state
+    // -----------------------------------------------------------------
+    let position = &mut ctx.accounts.position;
+    position.authority = ctx.accounts.user.key();
+    position.pool = pool.key();
+    position.position_vault = ctx.accounts.position_token_account.key();
+    position.is_long = is_long;
+    position.collateral = amount_in;
+    position.spot_size = spot_out;
+    position.debt_size = borrow_out;
+    position.nonce = nonce;
+
+    // Emit event (reuse Swapped for now)
     emit!(Swapped {
         user: ctx.accounts.user.key(),
-        pool: ctx.accounts.pool.key(),
-        token_in_mint: if is_sol_to_y {
-            anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
+        pool: pool.key(),
+        token_in_mint: if is_long {
+            anchor_lang::solana_program::system_program::ID
         } else {
-            ctx.accounts.pool.token_y_mint
+            pool.token_y_mint
         },
-        token_out_mint: if is_sol_to_y {
-            ctx.accounts.pool.token_y_mint
+        token_out_mint: if is_long {
+            pool.token_y_mint
         } else {
-            anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
+            anchor_lang::solana_program::system_program::ID
         },
         amount_in,
-        amount_out,
+        amount_out: total_out,
         timestamp: Clock::get()?.unix_timestamp,
     });
-    
+
     Ok(())
 } 

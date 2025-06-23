@@ -79,6 +79,35 @@ where:
 
 This approach enables token creation without requiring real base asset liquidity, as the token supply is fixed and 100\% contained within the liquidity pool at launch.
 
+\subsection{Symmetric Virtual Reserves for Leveraged Positions}
+
+To support leverage in a fully solvent and spread-free manner Whiplash keeps a \emph{pair} of running tallies for open interest:
+\begin{align}
+L &\;=\; \text{total memecoins borrowed by long positions},\\
+S &\;=\; \text{total base assets borrowed by short positions}.
+\end{align}
+
+These quantities are treated as \textbf{virtual reserves}.  For spot pricing we therefore use the \emph{effective} balances
+\begin{equation}
+\tilde x \;=\; x_{\text{real}} + S, \qquad
+\tilde y \;=\; y_{\text{real}} + L ,
+\quad\text{so that}\quad
+\tilde x \tilde y = k.
+\end{equation}
+
+Opening and closing positions simply move balances between the real and virtual books while leaving~$k$ unchanged:
+\begin{itemize}
+    \item \textbf{Long open} (collateral $c$, receives $\Delta y$ tokens): \\[-1.2ex]
+    $x_{\text{real}}\!\leftarrow x_{\text{real}} + c,\;
+     y_{\text{real}}\!\leftarrow y_{\text{real}} - \Delta y,\;
+     L\!\leftarrow L + \Delta y$.
+    \item \textbf{Long close}: reverse the above transfers and pay
+    \[ X_{\text{out}} = \tilde x_{\text{before}} - \frac{k}{\tilde y_{\text{before}}+\Delta y}. \]
+    \item \textbf{Short legs} are symmetric with $x\leftrightarrow y$ and $L\leftrightarrow S$.
+\end{itemize}
+
+Because both sides are exposed symmetrically the pool never promises more of either asset than it controls, and no artificial bid/ask spread is introduced. Setting a weighting factor $0<\gamma\le 1$ in the effective balances (e.g., $\tilde x = x_{\text{real}} + \gamma S$) offers a simple dial to charge an internal ``funding'' spread when desired.
+
 \section{Token Launch Mechanism}
 
 The token launch process in Whiplash represents a significant innovation in the AMM space:
@@ -114,120 +143,55 @@ This property guarantees that the virtual reserves model remains solvent because
 
 \section{Leverage Trading Mechanism}
 
-Whiplash introduces a novel approach to leverage trading that modifies the constant product invariant temporarily while positions are open. To ensure protocol solvency, the change in the invariant is tracked and used to settle the position.
+Whiplash introduces a symmetric \emph{virtual reserve} approach to leverage trading that \emph{preserves} the effective constant-product invariant even while positions are open. All open interest is mirrored into virtual reserves that are included in the pricing curve, eliminating insolvency paths and artificial bid/ask spread.
 
 \subsection{Opening a Leveraged Position}
 
-When a trader opens a leveraged position with collateral $c$ and leverage factor $L$:
+A trader supplies collateral $c$ (in the base asset) and chooses a leverage factor $L\ge 1$.  The operation is executed in two legs while \emph{always} keeping the effective product $k$ untouched.
 
-\begin{equation}
-\begin{aligned}
-\text{Collateral} &= c \\
-\text{Effective trade size} &= c \cdot L \\
-\text{Borrowed amount} &= c \cdot (L - 1)
-\end{aligned}
-\end{equation}
+\paragraph{1.~Spot leg.}  Using the effective reserves $(\tilde x,\tilde y)$ the trader swaps the collateral for tokens just like a normal AMM trade:
+\begin{align}
+\tilde x' &= \tilde x + c,\\
+\Delta y_{\text{spot}} &= \tilde y - \frac{k}{\tilde x'} .
+\end{align}
+Real vault updates: $x_{\text{real}}\!\leftarrow x_{\text{real}}+c$ and $y_{\text{real}}\!\leftarrow y_{\text{real}}-\Delta y_{\text{spot}}$.
 
-The trade is executed as a spot trade of size $c \cdot L$, and the resulting tokens are stored in a position manager:
+\paragraph{2.~Borrow leg.}  To reach the desired leverage the trader borrows extra tokens
+\[
+\Delta y_{\text{borrow}} = (L-1)\,\Delta y_{\text{spot}} ,
+\]
+removing them from $y_{\text{real}}$ and adding the same amount to the virtual tally $L$.  Because the real and virtual movements cancel out in $\tilde y$, the effective reserves remain $(\tilde x',\tilde y)$ and therefore $k$ is still exactly preserved.
 
-\begin{equation}
-\begin{aligned}
-\Delta y &= \frac{y_{\text{pre}} \cdot c \cdot L}{x_{\text{pre}} + c \cdot L} \\
-y_{\text{position}} &= \Delta y
-\end{aligned}
-\end{equation}
+The position record stores $(c,\,\Delta y_{\text{borrow}})$; its mark-to-market value will evolve with the pool price.
 
-Opening the position alters the pool's reserves and its constant product, $k$. The user's collateral $c$ is added to the base asset reserve.
+\subsection{Closing a Leveraged Position}
 
-\begin{equation}
-\begin{aligned}
-x_{\text{post}} &= x_{\text{pre}} + c \\
-y_{\text{post}} &= y_{\text{pre}} - \Delta y \\
-k_{\text{post}} &= x_{\text{post}} \cdot y_{\text{post}}
-\end{aligned}
-\end{equation}
+Let the position hold the debt $\Delta y_{\text{borrow}}$ and the purchased tokens $\Delta y_{\text{spot}}$.
 
-The deviation in the constant product, $\Delta k$, is calculated and stored with the position. This value is crucial for correctly closing the position later.
+\paragraph{1.~Debt repayment.}  The trader first transfers $\Delta y_{\text{borrow}}$ back to the pool.  The real vault gains those tokens and the virtual long tally decreases by the same amount, so $\tilde y$ and $k$ stay unchanged and no price impact occurs.
 
-\begin{equation}
-\Delta k = k_{\text{pre}} - k_{\text{post}} = (x_{\text{pre}} \cdot y_{\text{pre}}) - ((x_{\text{pre}} + c) \cdot (y_{\text{pre}} - \Delta y))
-\end{equation}
+\paragraph{2.~Spot unwind.}  The remaining $\Delta y_{\text{spot}}$ tokens are now swapped for the base asset using the standard constant-product formula on the current effective reserves $(\tilde x,\tilde y)$:
+\[
+X_{\text{out}} = \tilde x - \frac{k}{\tilde y + \Delta y_{\text{spot}}} .
+\]
+The pool pays $X_{\text{out}}$ from $x_{\text{real}}$, after which $(\tilde x- X_{\text{out}})(\tilde y+\Delta y_{\text{spot}})=k$ holds by construction.
 
-\subsection{Mathematical Impact on Reserves}
+\paragraph{PnL.}  The trader's profit or loss on the position is simply
+\[
+\text{PnL} = X_{\text{out}} - c .
+\]
 
-For a long position, the reserves are modified as shown above. The stored $\Delta k$ represents the exact amount by which the pool's invariant must be adjusted when the position is closed to ensure the pool remains solvent and the user's profit or loss is correctly calculated.
-
-\section{Closing a Leveraged Position}
-
-When a trader closes a leveraged position, the protocol uses the stored $\Delta k$ to restore the invariant and calculate the final payout. This process ensures that the trader's PnL reflects market movements while keeping the AMM's core mathematics sound.
-
-\subsection{Position Closure Calculation}
-
-To close a position, the user returns their $y_{\text{position}}$ tokens. The protocol calculates the base asset payout, $X_{\text{out}}$, by determining how many base assets must be paid out to restore the original constant product invariant, $k$. The payout is given by:
-
-\begin{equation}
-X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}}
-\end{equation}
-
-Here, $x_{\text{current}}$ and $y_{\text{current}}$ are the pool's reserves at the time of closing. The term $x_{\text{current}} \cdot y_{\text{position}}$ represents the value of the position's tokens in terms of the base asset, adjusted for swap impact, from which the stored $\Delta k$ is subtracted to ensure the pool's invariant is restored.
-
-This payout, $X_{\text{out}}$, includes the user's initial collateral plus any profits, or minus any losses. The user's Profit and Loss (PnL) on their initial collateral is:
-
-\begin{equation}
-\text{PnL} = X_{\text{out}} - c
-\end{equation}
+The same logic with $x\leftrightarrow y$ applies to closing shorts.
 
 \section{Liquidation Mechanism}
 
-The liquidation mechanism protects the protocol by ensuring that underwater positions are closed before they generate bad debt. It relies on the same $\Delta k$ mechanic to settle positions.
+Because the pool never borrows from itself, insolvency can only arise if a position's collateral no longer suffices to repurchase the debt it owes.  For a long this happens when
+\[
+X_{\text{debt}} = \tilde x - \frac{k}{\tilde y + \Delta y_{\text{borrow}}} \;\ge c .
+\]
+If the inequality is met the position is \emph{liquidatable}.  A liquidator simply transfers the missing base $X_{\text{debt}}-c$ to the pool (or equivalently buys the debt tokens) and receives the entire collateral plus an optional bounty.  Shorts are symmetric with $(x\leftrightarrow y)$.
 
-\subsection{Liquidation Condition}
-
-A position becomes \textbf{liquidatable} when the payout it would receive from a normal close is \emph{insufficient} to restore the stored $\Delta k$. Mathematically this corresponds to the case where the numerator of Equation~(\ref{eq:payout-long}) (or its short-side analogue) is non-positive so that
-
-\begin{equation}
-X_{\text{out}} \le 0 .
-\end{equation}
-
-For the long side this reduces to the simple inequality
-
-\begin{equation}
-x_{\text{current}}\,y_{\text{position}} \le \Delta k ,
-\end{equation}
-
-and the symmetric condition $y_{\text{current}}\,x_{\text{position}} \le \Delta k$ for shorts. At that point the trader's collateral is entirely exhausted and external intervention is required to bring the pool back to solvency.
-
-\subsection{Liquidation Execution}
-
-When a liquidator calls the \texttt{liquidate} instruction the protocol first computes the \emph{exact} quantity needed to mend the invariant:
-
-\begin{equation}
-\Delta y_{\text{needed}} = \left\lceil \frac{\Delta k}{x_{\text{current}}} \right\rceil \qquad\text{(longs)},
-\end{equation}
-
-or the mirrored expression $\Delta x_{\text{needed}} = \lceil \Delta k / y_{\text{current}} \rceil$ for shorts. Only this amount is transferred from the position vault to the pool; any surplus is left untouched so that the pool's constant product is \emph{exactly} restored—no more, no less. Because the trader's collateral is entirely depleted there is no payout, and the position account is closed with zero balance. The liquidator currently receives no reward, but the mechanism cleanly removes underwater risk from the pool.
-
-\section{Limbo State}
-
-A unique feature of Whiplash is the "limbo state" for positions that experience extreme price movements.
-
-\subsection{Mathematical Definition of Limbo}
-
-A position enters limbo when it meets the liquidation condition but no liquidator has yet closed it:
-\begin{equation}
-\begin{aligned}
-&x_{\text{current}} \cdot y_{\text{position}} \le \Delta k \\
-&\text{and no liquidator has fulfilled the liquidation}
-\end{aligned}
-\end{equation}
-
-\subsection{Exiting Limbo}
-
-A position can exit limbo if price movements cause its value to recover, such that it no longer meets the liquidation condition:
-
-\begin{equation}
-x_{\text{current}} \cdot y_{\text{position}} > \Delta k
-\end{equation}
+This mechanism closes underwater positions exactly at the breakeven point, guaranteeing that the pool never pays out more than it holds and therefore eliminating bad debt.
 
 \section{System Properties and Guarantees}
 
@@ -255,13 +219,12 @@ where $\text{deposits}_j$ represents the base asset deposited by the $j$-th user
 
 \subsection{Zero Bad Debt Guarantee}
 
-The protocol guarantees zero bad debt through its liquidation and limbo mechanisms:
+The protocol guarantees zero bad debt through its liquidation mechanism:
 
 \begin{equation}
 \forall \text{ positions } i: \text{either } \begin{cases}
 \text{position is healthy} \\
-\text{position is liquidatable} \\
-\text{position is in limbo}
+\text{position is liquidatable}
 \end{cases}
 \end{equation}
 
@@ -275,7 +238,6 @@ Whiplash represents a paradigm shift in AMM design by enabling permissionless to
     \item New tokens can be launched without requiring liquidity providers
     \item Leverage trading can amplify the inherent volatility of memecoins
     \item The protocol remains solvent at all times through its novel approach to reserve management
-    \item Traders are protected from flash crashes through the limbo mechanism
 \end{enumerate}
 
 By building on proven AMM mechanics while introducing innovative modifications, Whiplash creates a platform that makes "the world's most volatile asset class more volatile," providing a truly novel trading experience for memecoin enthusiasts.

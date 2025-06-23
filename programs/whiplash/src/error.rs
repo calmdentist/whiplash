@@ -58,4 +58,7 @@ pub enum WhiplashError {
 
     #[msg("Position cannot be closed (would require liquidation)")]
     PositionNotClosable,
+
+    #[msg("Functionality not yet implemented")]
+    NotImplemented,
 } 

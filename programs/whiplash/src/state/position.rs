@@ -15,20 +15,18 @@ pub struct Position {
     // Whether the position is long or short
     pub is_long: bool,
 
-    // The collateral amount
+    // The collateral amount supplied by the trader (denominated in the input asset)
     pub collateral: u64,
 
-    // The leverage multiplier
-    pub leverage: u32,
+    // Spot leg size that was swapped during opening.
+    //  • long  → quantity of token-Y purchased
+    //  • short → quantity of SOL (lamports) purchased
+    pub spot_size: u64,
 
-    // The entry price of the position
-    pub entry_price: u128,
-
-    // The position size (output token amount)
-    pub size: u64,
-
-    // The stored delta_k value needed to restore the pool invariant
-    pub delta_k: u128,
+    // Borrowed amount that was removed from the real reserves and mirrored into virtual reserves.
+    //  • long  → quantity of token-Y borrowed (added to virtual_token_y_amount)
+    //  • short → quantity of SOL (lamports) borrowed (added to virtual_sol_amount)
+    pub debt_size: u64,
 
     // The position nonce (allows for multiple positions in same pool)
     pub nonce: u64,
@@ -39,9 +37,4 @@ pub struct Position {
 
 impl Position {
     pub const LEN: usize = 8 + Position::INIT_SPACE;
-
-    pub fn calculate_fill_amount(&self) -> Result<u64> {
-        let fill_amount = self.collateral * self.leverage as u64 - self.collateral;
-        Ok(fill_amount)
-    }
 }

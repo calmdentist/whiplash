@@ -61,109 +61,27 @@ pub struct ClosePosition<'info> {
 
 pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let position = &ctx.accounts.position;
-    let pool = &ctx.accounts.pool;
-    
-    // -----------------------------------------------------------------
-    // Calculate payout using Δk model
-    // -----------------------------------------------------------------
+    let pool = &mut ctx.accounts.pool;
 
-    let position_size = position.size;
+    // Pointers to common accounts
+    let token_program = ctx.accounts.token_program.to_account_info();
 
-    // Current total reserves (real + virtual)
-    let total_x: u128 = pool.lamports
-        .checked_add(pool.virtual_sol_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
-    let total_y: u128 = pool.token_y_amount
-        .checked_add(pool.virtual_token_y_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    // Convenience values
+    let spot_in: u64 = position.spot_size;
+    let debt: u64 = position.debt_size;
 
-    let position_size_u128: u128 = position_size as u128;
-    let delta_k: u128 = position.delta_k;
+    let gross_amount_out: u64;
 
-    // Determine payout depending on position side
-    let (payout_u128, is_liquidatable) = if position.is_long {
-        // Long: user returns Y tokens and gets SOL
-        // X_out = (x * y_pos - delta_k) / (y + y_pos)
-        let product_val = total_x
-            .checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-
-        let numerator = if product_val <= delta_k {
-            0u128
-        } else {
-            product_val
-                .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?
-        };
-
-        if numerator == 0u128 {
-            (0u128, true)
-        } else {
-            let denominator = total_y
-                .checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            (
-                numerator
-                    .checked_div(denominator)
-                    .ok_or(error!(WhiplashError::MathOverflow))?,
-                false,
-            )
-        }
-    } else {
-        // Short: user returns SOL (x_pos) and gets Y tokens
-        // Y_out = (x_pos * y - delta_k) / (x + x_pos)
-        let product_val = position_size_u128
-            .checked_mul(total_y)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-
-        let numerator = if product_val <= delta_k {
-            0u128
-        } else {
-            product_val
-                .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?
-        };
-
-        if numerator == 0u128 {
-            (0u128, true)
-        } else {
-            let denominator = total_x
-                .checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            (
-                numerator
-                    .checked_div(denominator)
-                    .ok_or(error!(WhiplashError::MathOverflow))?,
-                false,
-            )
-        }
-    };
-
-    // If payout is zero, the position should be liquidated instead of closed
-    require!(!is_liquidatable && payout_u128 > 0, WhiplashError::PositionNotClosable);
-
-    if payout_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
-    }
-
-    let user_output: u64 = payout_u128 as u64;
-    
-    // Get PDA info for signing
-    let pool_bump = pool.bump;
-    let pool_mint = pool.token_y_mint;
-    
-    // Get the position bump from context
-    let bump = *ctx.bumps.get("position").unwrap();
-    let pool_key = ctx.accounts.pool.key();
-    let user_key = ctx.accounts.user.key();
-    let position_nonce = position.nonce;
-    
-    // Handle based on position type
+    // ------------------------------------------------------------------
+    // LONG  (user holds token-Y, will receive SOL back)
+    // ------------------------------------------------------------------
     if position.is_long {
-        // LONG POSITION (User holds Y tokens, gets SOL back)
-        
-        // 1. Transfer tokens from position to vault
-        let nonce_bytes = position_nonce.to_le_bytes();
+        // ---------- 1) Repay the borrowed tokens ----------
+        // Transfer `debt` tokens from the position vault to the pool vault.
+        let bump = *ctx.bumps.get("position").unwrap();
+        let nonce_bytes = position.nonce.to_le_bytes();
+        let pool_key = pool.key();
+        let user_key = ctx.accounts.user.key();
         let position_seeds = &[
             b"position".as_ref(),
             pool_key.as_ref(),
@@ -172,10 +90,10 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             &[bump],
         ];
         let position_signer = &[&position_seeds[..]];
-        
+
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                token_program.clone(),
                 Transfer {
                     from: ctx.accounts.position_token_account.to_account_info(),
                     to: ctx.accounts.token_y_vault.to_account_info(),
@@ -183,135 +101,103 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
                 },
                 position_signer,
             ),
-            position_size,
+            debt,
         )?;
-        
-        // 2. Update pool state
-        {
-            let pool = &mut ctx.accounts.pool;
-            pool.token_y_amount = pool.token_y_amount
-                .checked_add(position_size)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-                
-            pool.lamports = pool.lamports
-                .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-        }
-        
-        // 3. Transfer SOL to user (direct lamport transfer)
-        let dest_starting_lamports = ctx.accounts.user.lamports();
-        let source_account_info = ctx.accounts.pool.to_account_info();
-        
-        **source_account_info.try_borrow_mut_lamports()? = source_account_info.lamports()
-            .checked_sub(user_output)
-            .ok_or(error!(WhiplashError::InsufficientFunds))?;
-            
-        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? = dest_starting_lamports
-            .checked_add(user_output)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-    } else {
-        // SHORT POSITION (User holds SOL, gets Y tokens back)
-        
-        // For short positions, we only need to handle the accounting in the pool
-        // and transfer tokens to the user. The SOL in the position account will be
-        // returned to the user when the account is closed.
-        
-        // 1. Update pool state for accounting
-        {
-            let pool = &mut ctx.accounts.pool;
-            // Record that the SOL has been returned to the pool
-            pool.lamports = pool.lamports
-                .checked_add(position_size)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-                
-            // Deduct tokens being sent to the user
-            pool.token_y_amount = pool.token_y_amount
-                .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-        }
-        
-        // 1.5. Record rent lamports that will be sent to the pool when the position token
-        //      account is closed. We add them to the pool state now so that the bookkeeping
-        //      matches the real lamport transfer that the SPL-Token program will perform in
-        //      `token::close_account` below.
-        let position_acct_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-        require!(position_acct_lamports >= position_size, WhiplashError::InsufficientFunds);
-        let rent_lamports = position_acct_lamports
-            .checked_sub(position_size)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
 
-        if rent_lamports > 0 {
-            let pool = &mut ctx.accounts.pool;
-            pool.lamports = pool.lamports
-                .checked_add(rent_lamports)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-        }
-        
-        // 2. Transfer tokens from vault to user
-        let pool_seeds = &[
-            b"pool".as_ref(),
-            pool_mint.as_ref(),
-            &[pool_bump],
-        ];
-        let pool_signer = &[&pool_seeds[..]];
-        
+        // Update pool bookkeeping for debt repayment
+        pool.token_y_amount = pool.token_y_amount.checked_add(debt)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        pool.virtual_token_y_amount = pool.virtual_token_y_amount.checked_sub(debt)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // ---------- 2) Spot unwind ----------
+        // Compute SOL the user should receive for `spot_in` tokens.
+        let sol_out = pool.calculate_swap_y_to_x(spot_in)?;
+        gross_amount_out = sol_out;
+
+        // Transfer the `spot_in` tokens (spot leg) to the pool vault
         token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
+                token_program.clone(),
                 Transfer {
-                    from: ctx.accounts.token_y_vault.to_account_info(),
-                    to: ctx.accounts.user_token_out.to_account_info(),
-                    authority: ctx.accounts.pool.to_account_info(),
-                },
-                pool_signer,
-            ),
-            user_output,
-        )?;
-    }
-    
-    // Emit close position event
-    emit!(PositionClosed {
-        user: ctx.accounts.user.key(),
-        pool: ctx.accounts.pool.key(),
-        position: ctx.accounts.position.key(),
-        is_long: position.is_long,
-        position_size,
-        borrowed_amount: 0u64,
-        output_amount: payout_u128 as u64,
-        user_received: user_output,
-        timestamp: Clock::get()?.unix_timestamp,
-    });
-    
-    // Position account is automatically closed due to the close = user constraint
-    
-    // Close the position token account if it's a short position
-    // For long positions, token::transfer already emptied the account
-    // For short positions, we need to manually close the account
-    if !position.is_long {
-        // Create seeds for position PDA to act as authority
-        let nonce_bytes = position_nonce.to_le_bytes();
-        let position_seeds = &[
-            b"position".as_ref(),
-            pool_key.as_ref(),
-            user_key.as_ref(),
-            nonce_bytes.as_ref(),
-            &[bump],
-        ];
-        let position_signer = &[&position_seeds[..]];
-        
-        // Close the token account and send rent to pool
-        token::close_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                token::CloseAccount {
-                    account: ctx.accounts.position_token_account.to_account_info(),
-                    destination: ctx.accounts.pool.to_account_info(),
+                    from: ctx.accounts.position_token_account.to_account_info(),
+                    to: ctx.accounts.token_y_vault.to_account_info(),
                     authority: ctx.accounts.position.to_account_info(),
                 },
                 position_signer,
             ),
+            spot_in,
+        )?;
+
+        // Book real reserves
+        pool.token_y_amount = pool.token_y_amount.checked_add(spot_in)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        // Transfer SOL to user, then synchronize the internal counter.
+        **pool.to_account_info().try_borrow_mut_lamports()? -= sol_out;
+        **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += sol_out;
+        pool.lamports = **pool.to_account_info().try_borrow_lamports()?;
+
+    // ------------------------------------------------------------------
+    // SHORT (user holds SOL, will receive token-Y back)
+    // ------------------------------------------------------------------
+    } else {
+        // For a short, the position PDA itself holds the SOL that was borrowed.
+        // To close, we must transfer this SOL back to the pool.
+        let total_sol_to_repay = position.spot_size.checked_add(position.debt_size)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+
+        // ---------- 1) Repay SOL from position account to pool ----------
+        // Directly move lamports since both accounts are owned by this program.
+        **ctx.accounts.position.to_account_info().try_borrow_mut_lamports()? -= total_sol_to_repay;
+        **pool.to_account_info().try_borrow_mut_lamports()? += total_sol_to_repay;
+
+        // Update pool bookkeeping to match the new account balance
+        pool.lamports = **pool.to_account_info().try_borrow_lamports()?;
+        
+        pool.virtual_sol_amount = pool.virtual_sol_amount.checked_sub(position.debt_size)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // ---------- 2) Calculate and send token-Y output ----------
+        // The user is effectively swapping their original spot size worth of SOL
+        // back into the pool for token-Y at the new price.
+        let tokens_out = pool.calculate_swap_x_to_y(position.spot_size)?;
+        gross_amount_out = tokens_out;
+
+        // Book real reserve changes for the token-Y output
+        pool.token_y_amount = pool.token_y_amount.checked_sub(tokens_out)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // Transfer token-Y to user
+        let pool_signer_seeds = &[b"pool".as_ref(), pool.token_y_mint.as_ref(), &[pool.bump]];
+        let pool_signer = &[&pool_signer_seeds[..]];
+
+        token::transfer(
+            CpiContext::new_with_signer(
+                token_program,
+                Transfer {
+                    from: ctx.accounts.token_y_vault.to_account_info(),
+                    to: ctx.accounts.user_token_out.to_account_info(),
+                    authority: pool.to_account_info(),
+                },
+                pool_signer,
+            ),
+            tokens_out,
         )?;
     }
-    
+
+    // Emit event
+    emit!(PositionClosed {
+        user: ctx.accounts.user.key(),
+        pool: pool.key(),
+        position: ctx.accounts.position.key(),
+        is_long: position.is_long,
+        position_size: position.spot_size + position.debt_size,
+        borrowed_amount: position.debt_size,
+        output_amount: gross_amount_out,
+        user_received: gross_amount_out.wrapping_sub(position.collateral), // PnL
+        timestamp: Clock::get()?.unix_timestamp,
+    });
+
     Ok(())
 } 
