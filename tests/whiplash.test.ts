@@ -60,11 +60,12 @@ describe("whiplash", () => {
 
   // Pool initial values
   const INITIAL_TOKEN_AMOUNT = 1_000_000 * 10 ** 6; // 1 million tokens with 6 decimals
-  const VIRTUAL_SOL_RESERVE = 1_000 * LAMPORTS_PER_SOL; // 1,000 SOL (in lamports)
+  const VIRTUAL_SOL_RESERVE = 100 * LAMPORTS_PER_SOL; // 100 SOL (in lamports)
   const DECIMALS = 6;
   const METADATA_URI = "https://ipfs.io/ipfs/QmVySXmdq9qNG7H98tW5v8KTSUqPsLBYfo3EaKgR2shJex";
-  const SWAP_AMOUNT = 1 * LAMPORTS_PER_SOL; // 1 SOL
+  const SWAP_AMOUNT = 100 * LAMPORTS_PER_SOL; // 100 SOL
   const TOKEN_SWAP_AMOUNT = 100 * 10 ** 6; // 100 tokens with 6 decimals
+  const LEVERAGE_SWAP_AMOUNT = 20 * LAMPORTS_PER_SOL; // 20 SOL for leverage swaps
   const LEVERAGE = 50; // 5x leverage
 
   before(async () => {
@@ -144,6 +145,8 @@ describe("whiplash", () => {
       const finalK = constantProduct(finalPoolAccount);
       
       console.log("\nFinal K value:", finalK.toString());
+      console.log("Final reserves - Real SOL:", finalPoolAccount.lamports.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.lamports.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
+      console.log("Final reserves - Real Tokens:", finalPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.tokenYAmount.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
     } catch (error) {
       console.log("\nFinal K value: Pool no longer exists");
     }
@@ -220,6 +223,8 @@ describe("whiplash", () => {
       const initialK = constantProduct(poolAccount);
       
       console.log("\nInitial K value:", initialK.toString());
+      console.log("Initial reserves - Real SOL:", initialPoolLamports, "Virtual SOL:", initialVirtualSolAmount, "Total SOL:", initialTotalSol);
+      console.log("Initial reserves - Real Tokens:", poolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", poolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolTokenAmount);
     } catch (error) {
       console.error("Launch Error:", error);
       throw error;
@@ -301,6 +306,13 @@ describe("whiplash", () => {
       
       const initialK = constantProduct(initialPoolAccount);
       const finalK = constantProduct(finalPoolAccount);
+      
+      console.log("SOL->Token swap - Initial K:", initialK.toString());
+      console.log("SOL->Token swap - Initial reserves - Real SOL:", 0, "Virtual SOL:", initialVirtualSolAmount, "Total SOL:", initialTotalSol);
+      console.log("SOL->Token swap - Initial reserves - Real Tokens:", initialPoolTokenAmount, "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolTokenAmount + initialPoolAccount.virtualTokenYAmount.toNumber());
+      console.log("SOL->Token swap - Final K:", finalK.toString());
+      console.log("SOL->Token swap - Final reserves - Real SOL:", finalPoolLamports, "Virtual SOL:", finalVirtualSolAmount, "Total SOL:", finalTotalSol);
+      console.log("SOL->Token swap - Final reserves - Real Tokens:", finalPoolTokenAmount, "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolTokenAmount + finalPoolAccount.virtualTokenYAmount.toNumber());
       
       // Allow for very small rounding differences
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
@@ -392,6 +404,13 @@ describe("whiplash", () => {
       const finalTotalSol = finalVirtualSolAmount + finalPoolLamports;
       const finalK = constantProduct(finalPoolAccount);
       
+      console.log("Token->SOL swap - Initial K:", initialK.toString());
+      console.log("Token->SOL swap - Initial reserves - Real SOL:", initialPoolLamports, "Virtual SOL:", initialVirtualSolAmount, "Total SOL:", initialTotalSolAmount);
+      console.log("Token->SOL swap - Initial reserves - Real Tokens:", initialPoolTokenAmount, "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolTokenAmount + initialPoolAccount.virtualTokenYAmount.toNumber());
+      console.log("Token->SOL swap - Final K:", finalK.toString());
+      console.log("Token->SOL swap - Final reserves - Real SOL:", finalPoolLamports, "Virtual SOL:", finalVirtualSolAmount, "Total SOL:", finalTotalSol);
+      console.log("Token->SOL swap - Final reserves - Real Tokens:", finalPoolTokenAmount, "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolTokenAmount + finalPoolAccount.virtualTokenYAmount.toNumber());
+      
       // Allow for very small rounding differences
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
       const kDiffPercentage = kDiff / scaled(initialK);
@@ -416,7 +435,7 @@ describe("whiplash", () => {
 
       // Calculate expected output amount based on constant product formula with leverage
       // For leverage, multiply input amount by leverage/10 as per the code
-      const leveragedAmount = SWAP_AMOUNT * LEVERAGE / 10;
+      const leveragedAmount = LEVERAGE_SWAP_AMOUNT * LEVERAGE / 10;
       const expectedOutputAmount = Math.floor(
         (initialPoolTokenAmount * leveragedAmount) / (initialTotalSolAmount + leveragedAmount)
       );
@@ -429,7 +448,7 @@ describe("whiplash", () => {
       // Perform the leveraged swap
       const tx = await program.methods
         .leverageSwap(
-          new BN(SWAP_AMOUNT),       // amountIn (collateral)
+          new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
           new BN(minOutputAmount),   // minAmountOut
           LEVERAGE,                  // leverage factor
           new BN(positionNonce)      // nonce
@@ -457,7 +476,7 @@ describe("whiplash", () => {
 
       // Verify user SOL balance decreased by the collateral amount (plus fees)
       const finalUserSolBalance = await provider.connection.getBalance(wallet.publicKey);
-      expect(initialUserSolBalance - finalUserSolBalance).to.be.at.least(SWAP_AMOUNT);
+      expect(initialUserSolBalance - finalUserSolBalance).to.be.at.least(LEVERAGE_SWAP_AMOUNT);
 
       // Verify position token account received the tokens
       const positionTokenAccountInfo = await getAccount(provider.connection, positionTokenAccount);
@@ -470,7 +489,7 @@ describe("whiplash", () => {
       expect(positionAccount.pool.toString()).to.equal(poolPda.toString());
       expect(positionAccount.positionVault.toString()).to.equal(positionTokenAccount.toString());
       expect(positionAccount.isLong).to.be.true; // Should be a long position (SOL->Token)
-      expect(positionAccount.collateral.toNumber()).to.equal(SWAP_AMOUNT);
+      expect(positionAccount.collateral.toNumber()).to.equal(LEVERAGE_SWAP_AMOUNT);
       expect(positionAccount.leverage).to.equal(LEVERAGE);
       expect(positionAccount.size.toNumber()).to.equal(positionTokenBalance);
 
@@ -480,7 +499,7 @@ describe("whiplash", () => {
       const finalPoolLamports = finalPoolAccount.lamports.toNumber();
       
       // Pool should have received the collateral SOL
-      expect(finalPoolLamports - initialPoolLamports).to.equal(SWAP_AMOUNT);
+      expect(finalPoolLamports - initialPoolLamports).to.equal(LEVERAGE_SWAP_AMOUNT);
       
       // Pool tokens should have decreased by the amount sent to position
       expect(initialPoolTokenAmount - finalPoolTokenAmount).to.equal(positionTokenBalance);
@@ -761,7 +780,7 @@ describe("whiplash", () => {
       // Open a leveraged long position (SOL->Token)
       const openTx = await program.methods
         .leverageSwap(
-          new BN(SWAP_AMOUNT),       // amountIn (collateral)
+          new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
           new BN(0),                 // minAmountOut (0 for test simplicity)
           LEVERAGE,                  // leverage factor
           new BN(testPositionNonce)  // nonce
@@ -793,6 +812,8 @@ describe("whiplash", () => {
       const intermediatePoolAccount = await program.account.pool.fetch(poolPda);
       const intermediateK = constantProduct(intermediatePoolAccount);
       console.log("K after opening leverage position:", intermediateK);
+      console.log("Long leverage position - Reserves - Real SOL:", intermediatePoolAccount.lamports.toNumber(), "Virtual SOL:", intermediatePoolAccount.virtualSolAmount.toNumber(), "Total SOL:", intermediatePoolAccount.lamports.toNumber() + intermediatePoolAccount.virtualSolAmount.toNumber());
+      console.log("Long leverage position - Reserves - Real Tokens:", intermediatePoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", intermediatePoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", intermediatePoolAccount.tokenYAmount.toNumber() + intermediatePoolAccount.virtualTokenYAmount.toNumber());
       
       // Close the position immediately
       const closeTx = await program.methods
@@ -826,8 +847,12 @@ describe("whiplash", () => {
       // Verify K is restored (with small tolerance for rounding)
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
       const kDiffPercentage = kDiff / scaled(initialK);
-      console.log("Initial K:", initialK);
-      console.log("Final K:", finalK);
+      console.log("Open/Close Long - Initial K:", initialK);
+      console.log("Open/Close Long - Initial reserves - Real SOL:", initialPoolLamports, "Virtual SOL:", initialVirtualSolAmount, "Total SOL:", initialTotalSol);
+      console.log("Open/Close Long - Initial reserves - Real Tokens:", initialPoolTokenAmount, "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolTokenAmount + initialPoolAccount.virtualTokenYAmount.toNumber());
+      console.log("Open/Close Long - Final K:", finalK);
+      console.log("Open/Close Long - Final reserves - Real SOL:", finalPoolLamports, "Virtual SOL:", finalVirtualSolAmount, "Total SOL:", finalTotalSol);
+      console.log("Open/Close Long - Final reserves - Real Tokens:", finalPoolTokenAmount, "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolTokenAmount + finalPoolAccount.virtualTokenYAmount.toNumber());
       console.log("K difference percentage:", kDiffPercentage * 100, "%");
       
       expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance
@@ -838,7 +863,7 @@ describe("whiplash", () => {
       console.log("SOL spent:", solBalanceDiff / LAMPORTS_PER_SOL, "SOL");
       
       // Should spend less than 1% of collateral (plus gas)
-      expect(solBalanceDiff).to.be.lessThan(SWAP_AMOUNT * 0.01 + 25000000); // Increased buffer for gas/fees
+      expect(solBalanceDiff).to.be.lessThan(LEVERAGE_SWAP_AMOUNT * 0.01 + 25000000); // Increased buffer for gas/fees
     } catch (error) {
       console.error("Open/Close Long Position Error:", error);
       throw error;
@@ -957,6 +982,8 @@ describe("whiplash", () => {
       const intermediatePoolAccount = await program.account.pool.fetch(poolPda);
       const intermediateK = constantProduct(intermediatePoolAccount);
       console.log("K after opening leverage position:", intermediateK);
+      console.log("Short leverage position - Reserves - Real SOL:", intermediatePoolAccount.lamports.toNumber(), "Virtual SOL:", intermediatePoolAccount.virtualSolAmount.toNumber(), "Total SOL:", intermediatePoolAccount.lamports.toNumber() + intermediatePoolAccount.virtualSolAmount.toNumber());
+      console.log("Short leverage position - Reserves - Real Tokens:", intermediatePoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", intermediatePoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", intermediatePoolAccount.tokenYAmount.toNumber() + intermediatePoolAccount.virtualTokenYAmount.toNumber());
       
       // Close the position immediately
       const closeTx = await program.methods
@@ -993,8 +1020,12 @@ describe("whiplash", () => {
       // Verify K is restored (with small tolerance for rounding)
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
       const kDiffPercentage = kDiff / scaled(initialK);
-      console.log("Initial K:", initialK);
-      console.log("Final K:", finalK);
+      console.log("Open/Close Short - Initial K:", initialK);
+      console.log("Open/Close Short - Initial reserves - Real SOL:", initialPoolLamports, "Virtual SOL:", initialVirtualSolAmount, "Total SOL:", initialTotalSol);
+      console.log("Open/Close Short - Initial reserves - Real Tokens:", initialPoolTokenAmount, "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolTokenAmount + initialPoolAccount.virtualTokenYAmount.toNumber());
+      console.log("Open/Close Short - Final K:", finalK);
+      console.log("Open/Close Short - Final reserves - Real SOL:", finalPoolLamports, "Virtual SOL:", finalVirtualSolAmount, "Total SOL:", finalTotalSol);
+      console.log("Open/Close Short - Final reserves - Real Tokens:", finalPoolTokenAmount, "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolTokenAmount + finalPoolAccount.virtualTokenYAmount.toNumber());
       console.log("K difference percentage:", kDiffPercentage * 100, "%");
       
       expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance
@@ -1017,6 +1048,8 @@ describe("whiplash", () => {
       const initialPoolAccount = await program.account.pool.fetch(poolPda);
       const initialK = constantProduct(initialPoolAccount);
       console.log("Initial K before strategy:", initialK.toString());
+      console.log("Strategy - Initial reserves - Real SOL:", initialPoolAccount.lamports.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.lamports.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
+      console.log("Strategy - Initial reserves - Real Tokens:", initialPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.tokenYAmount.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
 
       // --- Step 1: Open a leveraged long position (SOL -> Token) ---
       const stratNonce = Math.floor(Math.random() * 1000000);
@@ -1041,7 +1074,7 @@ describe("whiplash", () => {
 
       const openTx = await program.methods
         .leverageSwap(
-          new BN(SWAP_AMOUNT),   // collateral SOL in lamports
+          new BN(LEVERAGE_SWAP_AMOUNT),   // collateral SOL in lamports
           new BN(0),             // accept any token output for simplicity
           LEVERAGE,              // leverage factor
           new BN(stratNonce)     // nonce
@@ -1135,6 +1168,8 @@ describe("whiplash", () => {
       const finalPoolAccount = await program.account.pool.fetch(poolPda);
       const finalK = constantProduct(finalPoolAccount);
       console.log("Final K after strategy:", finalK.toString());
+      console.log("Strategy - Final reserves - Real SOL:", finalPoolAccount.lamports.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.lamports.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
+      console.log("Strategy - Final reserves - Real Tokens:", finalPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.tokenYAmount.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
 
       // Verify K restored within tolerance
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
