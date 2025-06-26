@@ -128,7 +128,7 @@ pub fn handle_leverage_swap(
     };
 
     let leveraged_amount_out = amount_out - base_amount_out;
-    msg!("leveraged_amount_out: {}", leveraged_amount_out);
+    // msg!("leveraged_amount_out: {}", leveraged_amount_out);
     
     // -----------------------------------------------------------------
     // Calculate and store Δk (delta_k)
@@ -283,6 +283,7 @@ pub fn handle_leverage_swap(
         pool.leveraged_sol_amount = pool.leveraged_sol_amount.checked_add(leveraged_amount_out)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     }
+    // msg!("pool.leveraged_token_y_amount: {}", pool.leveraged_token_y_amount);
     
     // Emit swap event
     emit!(Swapped {

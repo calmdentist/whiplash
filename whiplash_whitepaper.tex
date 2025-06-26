@@ -47,20 +47,20 @@ Traditional AMMs, such as Uniswap, require significant seed capital to establish
 
 \section{Mathematical Foundation}
 
-At the core of Whiplash is a modified Uniswap V2 style AMM with the constant product invariant:
+At its core, Whiplash uses a constant product invariant similar to Uniswap V2. However, to support unified spot and leverage trading, the protocol maintains separate accounting for spot reserves and total leveraged debt. The total reserves are composed of:
+\begin{itemize}
+    \item $x$: The total reserve of the base asset (real + virtual).
+    \item $y$: The total reserve of the token.
+    \item $x_l$: The total borrowed amount of the base asset from short positions (leveraged SOL).
+    \item $y_l$: The total borrowed amount of the token from long positions (leveraged tokens).
+\end{itemize}
 
+The fundamental constant product invariant, used for pricing leveraged trades and calculating position values, is:
 \begin{equation}
 x \cdot y = k
 \end{equation}
 
-where:
-\begin{itemize}
-    \item $x$ represents the reserve of the base asset (stablecoin or SOL)
-    \item $y$ represents the reserve of the memecoin token
-    \item $k$ is a constant value maintained during spot trading
-\end{itemize}
-
-Unlike traditional AMMs, Whiplash introduces modifications to accommodate leveraged trading and zero seed capital token launches.
+where $k$ is a constant value. Spot trades, however, use a modified version of this invariant to ensure protocol solvency, as detailed in Section 2.3.
 
 \subsection{Virtual Reserves Model}
 
@@ -78,6 +78,28 @@ where:
 \end{itemize}
 
 This approach enables token creation without requiring real base asset liquidity, as the token supply is fixed and 100\% contained within the liquidity pool at launch.
+
+\subsection{Dynamic Reserve Adjustment for Spot Trading}
+
+To maintain solvency without penalizing small spot trades, Whiplash introduces a dynamic adjustment mechanism. When the pool has open leveraged positions, the reserves used for calculating spot trades are adjusted based on the size of the trade. This prevents scenarios where large spot trades could drain the real reserves of the pool faster than the pricing formula anticipates.
+
+The core pricing formulas are modified with a dynamic factor, $\alpha \in [0, 1]$:
+\begin{align}
+\text{For buys (X to Y): } (x + \alpha \cdot x_l) \cdot y &= k \\
+\text{For sells (Y to X): } x \cdot (y + \alpha \cdot y_l) &= k
+\end{align}
+
+where:
+\begin{itemize}
+    \item $x$ and $y$ are the total reserves of the base asset and token, respectively.
+    \item $x_l$ is the total borrowed base asset from short positions.
+    \item $y_l$ is the total borrowed token from long positions.
+    \item $\alpha$ is a dynamic factor that scales with the trade size.
+\end{itemize}
+
+The factor $\alpha$ is determined using quadratic interpolation. It is designed to be near zero for small trades, minimizing price impact for average users. As the trade size increases, $\alpha$ approaches 1, applying the full leveraged debt to the calculation. The function for $\alpha$ is defined such that $\alpha=1$ precisely when the trade's output would equal the pool's entire real reserve of the output asset.
+
+This approach creates a "soft" boundary that ensures the pool's solvency under extreme conditions while preserving favorable pricing for the majority of spot trades.
 
 \section{Token Launch Mechanism}
 
@@ -118,31 +140,25 @@ Whiplash introduces a novel approach to leverage trading that modifies the const
 
 \subsection{Opening a Leveraged Position}
 
-When a trader opens a leveraged position with collateral $c$ and leverage factor $L$:
-
+When a trader opens a leveraged position with collateral $c$ and leverage factor $L$, the trade is executed as a spot trade of size $c \cdot L$. The resulting tokens, $\Delta y$, are stored in a position manager.
 \begin{equation}
-\begin{aligned}
-\text{Collateral} &= c \\
-\text{Effective trade size} &= c \cdot L \\
-\text{Borrowed amount} &= c \cdot (L - 1)
-\end{aligned}
+\Delta y = \frac{y_{\text{pre}} \cdot c \cdot L}{x_{\text{pre}} + c \cdot L}
 \end{equation}
+These $\Delta y$ tokens become the size of the user's position, $y_{\text{position}}$.
 
-The trade is executed as a spot trade of size $c \cdot L$, and the resulting tokens are stored in a position manager:
-
+To track the pool's total debt, the borrowed portion of this trade is calculated. This is the difference between the tokens received from the full leveraged trade and the tokens that would have been received if only the collateral $c$ was swapped:
 \begin{equation}
-\begin{aligned}
-\Delta y &= \frac{y_{\text{pre}} \cdot c \cdot L}{x_{\text{pre}} + c \cdot L} \\
-y_{\text{position}} &= \Delta y
-\end{aligned}
+\Delta y_l = \Delta y - \frac{y_{\text{pre}} \cdot c}{x_{\text{pre}} + c}
 \end{equation}
+This borrowed amount is added to the pool's total leveraged token amount, $y_l$. A similar calculation applies for short positions, increasing $x_l$.
 
-Opening the position alters the pool's reserves and its constant product, $k$. The user's collateral $c$ is added to the base asset reserve.
+Opening the position alters the pool's reserves and its constant product, $k$. The user's collateral $c$ is added to the base asset reserve, and the pool's total leveraged debt is updated.
 
 \begin{equation}
 \begin{aligned}
 x_{\text{post}} &= x_{\text{pre}} + c \\
 y_{\text{post}} &= y_{\text{pre}} - \Delta y \\
+y_{l, \text{post}} &= y_{l, \text{pre}} + \Delta y_l \\
 k_{\text{post}} &= x_{\text{post}} \cdot y_{\text{post}}
 \end{aligned}
 \end{equation}
@@ -176,6 +192,8 @@ This payout, $X_{\text{out}}$, includes the user's initial collateral plus any p
 \begin{equation}
 \text{PnL} = X_{\text{out}} - c
 \end{equation}
+
+Upon closing, the borrowed amount originally associated with the position ($\Delta y_l$ or a corresponding $\Delta x_l$) is subtracted from the pool's total leveraged debt ($y_l$ or $x_l$), ensuring the system's accounting for total debt remains accurate.
 
 \section{Liquidation Mechanism}
 
