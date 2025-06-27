@@ -80,6 +80,7 @@ pub fn handle_launch(
     pool.token_y_mint = ctx.accounts.token_mint.key();
     pool.token_y_vault = ctx.accounts.token_vault.key();
     pool.bump = *ctx.bumps.get("pool").unwrap();
+    pool.creation_timestamp = Clock::get()?.unix_timestamp as u64;
     
     // Calculate total supply with proper overflow checks
     let total_supply = 1_000_000_000_000_000u64; // 1 billion with 6 decimals

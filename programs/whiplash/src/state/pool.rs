@@ -29,6 +29,9 @@ pub struct Pool {
 
     // Leveraged SOL reserves
     pub leveraged_sol_amount: u64,
+
+    // Creation timestamp
+    pub creation_timestamp: u64,
     
     // Bump seed for PDA derivation
     pub bump: u8,
