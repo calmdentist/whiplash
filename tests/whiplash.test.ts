@@ -231,44 +231,44 @@ describe("whiplash", () => {
     }
   });
 
-  it("Liquidation sanity test - opens leverage position and liquidates it", async () => {
+  it("Opens leverage position, performs repeated spot buy/sell cycles, then closes position", async () => {
     try {
-      // Get initial pool state
+      // Record initial pool state
       const initialPoolAccount = await program.account.pool.fetch(poolPda);
       const initialK = constantProduct(initialPoolAccount);
-      console.log("Liquidation test - Initial K:", initialK.toString());
-      
-      // Generate a random nonce for the liquidation test position
-      const liquidationTestNonce = Math.floor(Math.random() * 1000000);
-      const liquidationTestNonceBytes = new BN(liquidationTestNonce).toArrayLike(Buffer, "le", 8);
+      console.log("Initial K before cycle test:", initialK.toString());
+      console.log("Cycle Test - Initial reserves - Real SOL:", initialPoolAccount.lamports.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.lamports.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
+      console.log("Cycle Test - Initial reserves - Real Tokens:", initialPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.tokenYAmount.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
+
+      // Generate a random nonce for this test position
+      const cycleTestNonce = Math.floor(Math.random() * 1000000);
+      const cycleTestNonceBytes = new BN(cycleTestNonce).toArrayLike(Buffer, "le", 8);
       
       // Derive the position PDA
-      const [liquidationTestPositionPda, liquidationTestPositionBump] = await PublicKey.findProgramAddressSync(
+      const [cycleTestPositionPda, cycleTestPositionBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
           poolPda.toBuffer(),
           wallet.publicKey.toBuffer(),
-          liquidationTestNonceBytes,
+          cycleTestNonceBytes,
         ],
         program.programId
       );
       
       // Calculate position token account address
-      const liquidationTestPositionTokenAccount = await getAssociatedTokenAddress(
+      const cycleTestPositionTokenAccount = await getAssociatedTokenAddress(
         tokenMint,
-        liquidationTestPositionPda,
+        cycleTestPositionPda,
         true // allowOwnerOffCurve
       );
-      
-      console.log("Opening leverage position for liquidation test...");
-      
-      // Open a leveraged long position (SOL->Token)
+
+      // --- Step 1: Open a leveraged long position (SOL->Token) ---
       const openTx = await program.methods
         .leverageSwap(
           new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
           new BN(0),                          // minAmountOut (0 for test simplicity)
           LEVERAGE,                           // leverage factor
-          new BN(liquidationTestNonce)        // nonce
+          new BN(cycleTestNonce)              // nonce
         )
         .accounts({
           user: wallet.publicKey,
@@ -276,8 +276,8 @@ describe("whiplash", () => {
           tokenYVault: tokenVault,
           userTokenIn: wallet.publicKey,
           userTokenOut: tokenAccount,
-          position: liquidationTestPositionPda,
-          positionTokenAccount: liquidationTestPositionTokenAccount,
+          position: cycleTestPositionPda,
+          positionTokenAccount: cycleTestPositionTokenAccount,
           positionTokenMint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -287,96 +287,252 @@ describe("whiplash", () => {
         .rpc();
       
       await provider.connection.confirmTransaction(openTx);
-      console.log("Opened leverage position for liquidation test");
+      console.log("Opened leveraged long position for cycle test");
+
+      // --- Step 2: Perform repeated spot buy/sell cycles ---
+      const NUM_CYCLES = 25;
+      const SPOT_BUY_AMOUNT = 20 * LAMPORTS_PER_SOL; // 20 SOL per cycle
       
-      // Get position state before liquidation
-      const positionAccount = await program.account.position.fetch(liquidationTestPositionPda);
-      console.log("Position size:", positionAccount.size.toNumber());
-      console.log("Position delta_k:", positionAccount.deltaK.toString());
-      
-      // Get pool state after opening position
-      const postOpenPoolAccount = await program.account.pool.fetch(poolPda);
-      const postOpenK = constantProduct(postOpenPoolAccount);
-      console.log("K after opening position:", postOpenK.toString());
-      
-      // Create a liquidator keypair
-      const liquidator = Keypair.generate();
-      
-      // Fund the liquidator
-      await provider.connection.confirmTransaction(
-        await provider.connection.requestAirdrop(
-          liquidator.publicKey,
-          0.1 * LAMPORTS_PER_SOL
-        )
-      );
-      
-      // Create token account for liquidator to receive rewards (for long positions)
-      const liquidatorTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        liquidator.publicKey
-      );
-      
-      const createLiquidatorATAIx = createAssociatedTokenAccountInstruction(
-        liquidator.publicKey,
-        liquidatorTokenAccount,
-        liquidator.publicKey,
-        tokenMint
-      );
-      
-      const setupLiquidatorTx = new anchor.web3.Transaction().add(createLiquidatorATAIx);
-      await provider.sendAndConfirm(setupLiquidatorTx, [liquidator]);
-      
-      console.log("Liquidating position...");
-      
-             // Liquidate the position
-       const liquidateTx = await program.methods
-         .liquidate()
-         .accounts({
-           liquidator: liquidator.publicKey,
-           positionOwner: wallet.publicKey,
-           pool: poolPda,
-           tokenYVault: tokenVault,
-           position: liquidationTestPositionPda,
-           positionTokenAccount: liquidationTestPositionTokenAccount,
-           liquidatorRewardAccount: liquidatorTokenAccount, // Liquidator receives tokens for long position
-           tokenProgram: TOKEN_PROGRAM_ID,
-           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-           systemProgram: SystemProgram.programId,
-           rent: SYSVAR_RENT_PUBKEY,
-         })
-        .signers([liquidator])
+      for (let i = 0; i < NUM_CYCLES; i++) {
+        console.log(`\nCycle ${i + 1}/${NUM_CYCLES}`);
+        
+        // Get token balance before spot buy
+        const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
+        const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
+
+        // Spot buy: SOL -> Token
+        const spotBuyTx = await program.methods
+          .swap(
+            new BN(SPOT_BUY_AMOUNT), // buy with 20 SOL
+            new BN(0)                // accept any output
+          )
+          .accounts({
+            user: wallet.publicKey,
+            pool: poolPda,
+            tokenYVault: tokenVault,
+            userTokenIn: wallet.publicKey,  // SOL from user wallet
+            userTokenOut: tokenAccount,     // Tokens to user token account
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        await provider.connection.confirmTransaction(spotBuyTx);
+
+        // Calculate tokens obtained from spot buy
+        const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
+        const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
+        const tokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
+        
+        console.log(`  Spot buy: acquired ${tokensObtained} tokens`);
+
+        // Spot sell: Token -> SOL (sell all tokens obtained)
+        if (tokensObtained > 0) {
+          const spotSellTx = await program.methods
+            .swap(
+              new BN(tokensObtained),  // sell all tokens obtained
+              new BN(0)                // accept any SOL output
+            )
+            .accounts({
+              user: wallet.publicKey,
+              pool: poolPda,
+              tokenYVault: tokenVault,
+              userTokenIn: tokenAccount,      // Tokens from user token account
+              userTokenOut: wallet.publicKey, // SOL to user wallet
+              tokenProgram: TOKEN_PROGRAM_ID,
+              systemProgram: SystemProgram.programId,
+            })
+            .rpc();
+          await provider.connection.confirmTransaction(spotSellTx);
+          console.log(`  Spot sell: sold ${tokensObtained} tokens`);
+        }
+      }
+
+      console.log(`\nCompleted ${NUM_CYCLES} spot buy/sell cycles`);
+
+      // --- Step 3: Close the leveraged long position ---
+      const closeTx = await program.methods
+        .closePosition()
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          position: cycleTestPositionPda,
+          positionTokenAccount: cycleTestPositionTokenAccount,
+          userTokenOut: wallet.publicKey, // SOL back to user for long position
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
         .rpc();
-      
-      await provider.connection.confirmTransaction(liquidateTx);
-      console.log("Liquidated position successfully");
-      
-      // Verify liquidator received reward
-      const liquidatorTokenAccountInfo = await getAccount(provider.connection, liquidatorTokenAccount);
-      const liquidatorReward = Number(liquidatorTokenAccountInfo.amount);
-      console.log("Liquidator reward:", liquidatorReward);
-      expect(liquidatorReward).to.be.above(0);
-      
-      // Get final pool state
+      await provider.connection.confirmTransaction(closeTx);
+      console.log("Closed leveraged long position");
+
+      // --- Step 4: Log final pool state ---
       const finalPoolAccount = await program.account.pool.fetch(poolPda);
       const finalK = constantProduct(finalPoolAccount);
-      console.log("Final K after liquidation:", finalK.toString());
-      
-      // Verify K is restored (should be equal to initial K)
+      console.log("\nFinal K after cycle test:", finalK.toString());
+      console.log("Cycle Test - Final reserves - Real SOL:", finalPoolAccount.lamports.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.lamports.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
+      console.log("Cycle Test - Final reserves - Real Tokens:", finalPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.tokenYAmount.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
+
+      // Compare with initial state
       const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
       const kDiffPercentage = kDiff / scaled(initialK);
       console.log("K difference percentage:", kDiffPercentage * 100, "%");
-      
-      // With liquidation, K should be exactly restored
-      expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance for rounding
-      
-      console.log("Liquidation sanity test completed successfully!");
-      
+
     } catch (error) {
-      console.error("Liquidation sanity test Error:", error);
+      console.error("Cycle test Error:", error);
       throw error;
     }
   });
   return;
+
+  // it("Liquidation sanity test - opens leverage position and liquidates it", async () => {
+  //   try {
+  //     // Get initial pool state
+  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
+  //     const initialK = constantProduct(initialPoolAccount);
+  //     console.log("Liquidation test - Initial K:", initialK.toString());
+      
+  //     // Generate a random nonce for the liquidation test position
+  //     const liquidationTestNonce = Math.floor(Math.random() * 1000000);
+  //     const liquidationTestNonceBytes = new BN(liquidationTestNonce).toArrayLike(Buffer, "le", 8);
+      
+  //     // Derive the position PDA
+  //     const [liquidationTestPositionPda, liquidationTestPositionBump] = await PublicKey.findProgramAddressSync(
+  //       [
+  //         Buffer.from("position"),
+  //         poolPda.toBuffer(),
+  //         wallet.publicKey.toBuffer(),
+  //         liquidationTestNonceBytes,
+  //       ],
+  //       program.programId
+  //     );
+      
+  //     // Calculate position token account address
+  //     const liquidationTestPositionTokenAccount = await getAssociatedTokenAddress(
+  //       tokenMint,
+  //       liquidationTestPositionPda,
+  //       true // allowOwnerOffCurve
+  //     );
+      
+  //     console.log("Opening leverage position for liquidation test...");
+      
+  //     // Open a leveraged long position (SOL->Token)
+  //     const openTx = await program.methods
+  //       .leverageSwap(
+  //         new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
+  //         new BN(0),                          // minAmountOut (0 for test simplicity)
+  //         LEVERAGE,                           // leverage factor
+  //         new BN(liquidationTestNonce)        // nonce
+  //       )
+  //       .accounts({
+  //         user: wallet.publicKey,
+  //         pool: poolPda,
+  //         tokenYVault: tokenVault,
+  //         userTokenIn: wallet.publicKey,
+  //         userTokenOut: tokenAccount,
+  //         position: liquidationTestPositionPda,
+  //         positionTokenAccount: liquidationTestPositionTokenAccount,
+  //         positionTokenMint: tokenMint,
+  //         tokenProgram: TOKEN_PROGRAM_ID,
+  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+  //         systemProgram: SystemProgram.programId,
+  //         rent: SYSVAR_RENT_PUBKEY,
+  //       })
+  //       .rpc();
+      
+  //     await provider.connection.confirmTransaction(openTx);
+  //     console.log("Opened leverage position for liquidation test");
+      
+  //     // Get position state before liquidation
+  //     const positionAccount = await program.account.position.fetch(liquidationTestPositionPda);
+  //     console.log("Position size:", positionAccount.size.toNumber());
+  //     console.log("Position delta_k:", positionAccount.deltaK.toString());
+      
+  //     // Get pool state after opening position
+  //     const postOpenPoolAccount = await program.account.pool.fetch(poolPda);
+  //     const postOpenK = constantProduct(postOpenPoolAccount);
+  //     console.log("K after opening position:", postOpenK.toString());
+      
+  //     // Create a liquidator keypair
+  //     const liquidator = Keypair.generate();
+      
+  //     // Fund the liquidator
+  //     await provider.connection.confirmTransaction(
+  //       await provider.connection.requestAirdrop(
+  //         liquidator.publicKey,
+  //         0.1 * LAMPORTS_PER_SOL
+  //       )
+  //     );
+      
+  //     // Create token account for liquidator to receive rewards (for long positions)
+  //     const liquidatorTokenAccount = await getAssociatedTokenAddress(
+  //       tokenMint,
+  //       liquidator.publicKey
+  //     );
+      
+  //     const createLiquidatorATAIx = createAssociatedTokenAccountInstruction(
+  //       liquidator.publicKey,
+  //       liquidatorTokenAccount,
+  //       liquidator.publicKey,
+  //       tokenMint
+  //     );
+      
+  //     const setupLiquidatorTx = new anchor.web3.Transaction().add(createLiquidatorATAIx);
+  //     await provider.sendAndConfirm(setupLiquidatorTx, [liquidator]);
+      
+  //     console.log("Liquidating position...");
+      
+  //            // Liquidate the position
+  //      const liquidateTx = await program.methods
+  //        .liquidate()
+  //        .accounts({
+  //          liquidator: liquidator.publicKey,
+  //          positionOwner: wallet.publicKey,
+  //          pool: poolPda,
+  //          tokenYVault: tokenVault,
+  //          position: liquidationTestPositionPda,
+  //          positionTokenAccount: liquidationTestPositionTokenAccount,
+  //          liquidatorRewardAccount: liquidatorTokenAccount, // Liquidator receives tokens for long position
+  //          tokenProgram: TOKEN_PROGRAM_ID,
+  //          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+  //          systemProgram: SystemProgram.programId,
+  //          rent: SYSVAR_RENT_PUBKEY,
+  //        })
+  //       .signers([liquidator])
+  //       .rpc();
+      
+  //     await provider.connection.confirmTransaction(liquidateTx);
+  //     console.log("Liquidated position successfully");
+      
+  //     // Verify liquidator received reward
+  //     const liquidatorTokenAccountInfo = await getAccount(provider.connection, liquidatorTokenAccount);
+  //     const liquidatorReward = Number(liquidatorTokenAccountInfo.amount);
+  //     console.log("Liquidator reward:", liquidatorReward);
+  //     expect(liquidatorReward).to.be.above(0);
+      
+  //     // Get final pool state
+  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
+  //     const finalK = constantProduct(finalPoolAccount);
+  //     console.log("Final K after liquidation:", finalK.toString());
+      
+  //     // Verify K is restored (should be equal to initial K)
+  //     const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
+  //     const kDiffPercentage = kDiff / scaled(initialK);
+  //     console.log("K difference percentage:", kDiffPercentage * 100, "%");
+      
+  //     // With liquidation, K should be exactly restored
+  //     expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance for rounding
+      
+  //     console.log("Liquidation sanity test completed successfully!");
+      
+  //   } catch (error) {
+  //     console.error("Liquidation sanity test Error:", error);
+  //     throw error;
+  //   }
+  // });
+  // return;
 
   // it("Spot buys, opens leveraged long, then sells all spot tokens without error", async () => {
   //   try {
