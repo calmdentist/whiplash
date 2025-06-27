@@ -160,15 +160,24 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     // Execute liquidation
     // -----------------------------------------------------------------
 
-    // Calculate exact amount needed to restore invariant
+    // Calculate exact amount needed to restore invariant using ceiling division
+    // to ensure we restore enough tokens to fully restore the invariant
     let restore_amount = if position.is_long {
-        // For longs: delta_k / x_current
+        // For longs: ceil(delta_k / x_current) = (delta_k + x_current - 1) / x_current
         delta_k
+            .checked_add(total_x)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_sub(1)
+            .ok_or(error!(WhiplashError::MathUnderflow))?
             .checked_div(total_x)
             .ok_or(error!(WhiplashError::MathOverflow))?
     } else {
-        // For shorts: delta_k / y_current  
+        // For shorts: ceil(delta_k / y_current) = (delta_k + y_current - 1) / y_current
         delta_k
+            .checked_add(total_y)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_sub(1)
+            .ok_or(error!(WhiplashError::MathUnderflow))?
             .checked_div(total_y)
             .ok_or(error!(WhiplashError::MathOverflow))?
     };
