@@ -150,16 +150,42 @@ Upon closing, the borrowed amount originally associated with the position ($\Del
 
 \section{Liquidation Mechanism}
 
-The liquidation mechanism incentivizes liquidators with a discounted price to obtain underwater assets, and restores $\Delta k$, effectively repaying the loan. A position becomes \textbf{liquidatable} when the payout it would receive from a normal close is \emph{insufficient} to restore the stored $\Delta k$.
-\subsection{Liquidation Execution}
+The liquidation mechanism incentivizes liquidators with a reward for closing underwater positions while restoring the pool's invariant. This approach ensures efficient liquidation of risky positions while providing clear economic incentives for liquidators.
 
-When a liquidator calls the \texttt{liquidate} instruction the protocol first computes the \emph{exact} quantity needed to mend the invariant:
+\subsection{Liquidation Condition}
+
+A position becomes \textbf{liquidatable} when the expected payout from closing the position is insufficient to restore the stored $\Delta k$ with a 5\% buffer. For long positions, the condition is:
 
 \begin{equation}
-\Delta y_{\text{needed}} = \left\lceil \frac{\Delta k}{x_{\text{current}}} \right\rceil \qquad\text{(longs)},
+X_{\text{out}} \leq \frac{\Delta k}{x_{\text{current}}} \times 1.05
 \end{equation}
 
-or the mirrored expression $\Delta x_{\text{needed}} = \lceil \Delta k / y_{\text{current}} \rceil$ for shorts. Only this amount is transferred from the position vault to the pool; any surplus is left untouched so that the pool's constant product is \emph{exactly} restored—no more, no less. Because the trader's collateral is entirely depleted there is no payout, and the position account is closed with zero balance. The liquidator currently receives no reward, but the mechanism cleanly removes underwater risk from the pool.
+where $X_{\text{out}}$ is the payout the position would receive from a normal close, calculated as:
+
+\begin{equation}
+X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}}
+\end{equation}
+
+For short positions, the equivalent condition applies with the roles of base asset and token reversed.
+
+\subsection{Liquidation Execution}
+
+When a liquidator calls the \texttt{liquidate} instruction, the protocol executes the following steps:
+
+\begin{enumerate}
+    \item The position is closed by returning all $y_{\text{position}}$ tokens to the pool
+    \item The exact quantity needed to restore the invariant is calculated:
+    \begin{equation}
+    \Delta y_{\text{restore}} = \frac{\Delta k}{x_{\text{current}}}
+    \end{equation}
+    \item This amount is transferred to the pool reserves to restore $k$ exactly
+    \item Any remaining tokens from the position become the liquidator's reward:
+    \begin{equation}
+    \text{Liquidator Reward} = y_{\text{position}} - \Delta y_{\text{restore}}
+    \end{equation}
+\end{enumerate}
+
+This mechanism ensures the pool's solvency is maintained while providing economic incentives for timely liquidation of underwater positions. The 5\% buffer in the liquidation condition helps account for small price movements and ensures liquidators are adequately compensated for their service.
 
 \section{Limbo State}
 

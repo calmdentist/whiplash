@@ -53,6 +53,10 @@ pub struct Liquidate<'info> {
     )]
     pub position_token_account: Account<'info, TokenAccount>,
     
+    /// CHECK: This can be either an SPL token account OR a native SOL account (liquidator wallet)
+    #[account(mut)]
+    pub liquidator_reward_account: UncheckedAccount<'info>,
+    
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
@@ -60,31 +64,13 @@ pub struct Liquidate<'info> {
 }
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
-    // First check if the position is liquidatable
     let position = &ctx.accounts.position;
     let pool = &ctx.accounts.pool;
     
     // -----------------------------------------------------------------
-    // Liquidation condition based on Δk
-    // --------------------------------------------------------------
-    // A position becomes eligible for liquidation when the output it
-    // would receive from a regular close *cannot* fully restore the
-    // stored Δk.  Equivalently, when the amount that must be paid to
-    // the trader ( `payout` ) is ≤ 0.
-    //
-    // For a long  position: payout = (x * y_pos − Δk) / (y + y_pos)
-    // For a short position: payout = (x_pos * y − Δk) / (x + x_pos)
-    //
-    // We additionally determine the *exact* amount that the pool
-    // needs from the position to bring k back to its pre-trade value
-    // (denoted `tokens_needed`).  A position can only be liquidated
-    // when its vault holds exactly this amount.  If it holds less it
-    // is in the "limbo" state (awaiting further price movement) and
-    // if it holds more it should be closed normally because it is
-    // still in-the-money.
+    // Calculate expected payout and check liquidation condition
     // -----------------------------------------------------------------
 
-    let position_size_u128: u128 = position.size as u128;
     let position_size = position.size;
 
     // Current total reserves (real + virtual)
@@ -95,75 +81,123 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         .checked_add(pool.virtual_token_y_amount)
         .ok_or(error!(WhiplashError::MathOverflow))? as u128;
 
-    // Compute payout using same formula as close_position
-    let payout_u128: u128 = if position.is_long {
+    let position_size_u128: u128 = position_size as u128;
+    let delta_k: u128 = position.delta_k;
+
+    // Calculate expected payout and liquidation threshold
+    let (expected_payout, liquidation_threshold) = if position.is_long {
+        // Long: user returns Y tokens and gets SOL
         // X_out = (x * y_pos - delta_k) / (y + y_pos)
         let product_val = total_x
             .checked_mul(position_size_u128)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
-        let numerator = if product_val <= position.delta_k {
+        let expected_payout = if product_val <= delta_k {
             0u128
         } else {
-            product_val
-                .checked_sub(position.delta_k)
+            let numerator = product_val
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            let denominator = total_y
+                .checked_add(position_size_u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            numerator
+                .checked_div(denominator)
                 .ok_or(error!(WhiplashError::MathOverflow))?
         };
 
-        let denominator = total_y
-            .checked_add(position_size_u128)
+        // Liquidation threshold: (delta_k / x_current) * 1.05
+        let threshold = delta_k
+            .checked_mul(105)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_div(100)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_div(total_x)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
-        numerator
-            .checked_div(denominator)
-            .ok_or(error!(WhiplashError::MathOverflow))?
+        (expected_payout, threshold)
     } else {
+        // Short: user returns SOL and gets Y tokens
         // Y_out = (x_pos * y - delta_k) / (x + x_pos)
         let product_val = position_size_u128
             .checked_mul(total_y)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
-        let numerator = if product_val <= position.delta_k {
+        let expected_payout = if product_val <= delta_k {
             0u128
         } else {
-            product_val
-                .checked_sub(position.delta_k)
+            let numerator = product_val
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            let denominator = total_x
+                .checked_add(position_size_u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            numerator
+                .checked_div(denominator)
                 .ok_or(error!(WhiplashError::MathOverflow))?
         };
 
-        let denominator = total_x
-            .checked_add(position_size_u128)
+        // Liquidation threshold: (delta_k / y_current) * 1.05
+        let threshold = delta_k
+            .checked_mul(105)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_div(100)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+            .checked_div(total_y)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
-        numerator
-            .checked_div(denominator)
+        (expected_payout, threshold)
+    };
+
+    // Check if position is liquidatable: expected_payout <= threshold
+    require!(
+        expected_payout <= liquidation_threshold,
+        WhiplashError::PositionNotLiquidatable
+    );
+
+    // -----------------------------------------------------------------
+    // Execute liquidation
+    // -----------------------------------------------------------------
+
+    // Calculate exact amount needed to restore invariant
+    let restore_amount = if position.is_long {
+        // For longs: delta_k / x_current
+        delta_k
+            .checked_div(total_x)
+            .ok_or(error!(WhiplashError::MathOverflow))?
+    } else {
+        // For shorts: delta_k / y_current  
+        delta_k
+            .checked_div(total_y)
             .ok_or(error!(WhiplashError::MathOverflow))?
     };
 
-    msg!("payout_u128: {}", payout_u128);
-    require!(payout_u128 == 0u128, WhiplashError::PositionNotLiquidatable);
+    // Ensure restore amount fits in u64
+    if restore_amount > u64::MAX as u128 {
+        return Err(error!(WhiplashError::MathOverflow));
+    }
+    let restore_amount_u64 = restore_amount as u64;
 
-    // -----------------------------------------------------------------
-    // Calculate how many tokens (or lamports for a short) are *needed*
-    // to fully restore Δk at the current price. This derives from:
-    //     Δk = total_x * Δy   →   Δy = ceil(Δk / total_x)
-    // for longs and the symmetric expression for shorts.
-    // -----------------------------------------------------------------
+    // Calculate liquidator reward
+    let liquidator_reward = position_size
+        .checked_sub(restore_amount_u64)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
 
-    // We already verified payout_u128 == 0, meaning x*y_pos <= Δk for long
-    // (or its short analogue).  The liquidator will provide whatever
-    // additional opposite-side asset is required; no strict equality
-    // between reserves and position size is necessary.
+    // Get PDA info for signing
+    let pool_bump = pool.bump;
+    let pool_mint = pool.token_y_mint;
+    
+    // Get the position bump from context
+    let bump = *ctx.bumps.get("position").unwrap();
+    let pool_key = ctx.accounts.pool.key();
+    let position_owner_key = ctx.accounts.position_owner.key();
+    let position_nonce = position.nonce;
 
-    // If we get here, the position is eligible for liquidation
     // Handle based on position type
     if position.is_long {
-        // Long position: transfer tokens from position to vault
-        let bump = *ctx.bumps.get("position").unwrap();
-        let pool_key = ctx.accounts.pool.key();
-        let position_owner_key = ctx.accounts.position_owner.key();
-        let position_nonce = position.nonce;
+        // LONG POSITION LIQUIDATION
         
+        // 1. Transfer tokens from position to vault (restore amount)
         let nonce_bytes = position_nonce.to_le_bytes();
         let position_seeds = &[
             b"position".as_ref(),
@@ -172,96 +206,104 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             nonce_bytes.as_ref(),
             &[bump],
         ];
-        
         let position_signer = &[&position_seeds[..]];
         
-        let cpi_accounts = Transfer {
-            from: ctx.accounts.position_token_account.to_account_info(),
-            to: ctx.accounts.token_y_vault.to_account_info(),
-            authority: ctx.accounts.position.to_account_info(),
-        };
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
-            position_signer,
-        );
-        token::transfer(cpi_ctx, position_size)?;
-        
-        // Calculate how much SOL the liquidator must provide to fully
-        // restore Δk now that the Y tokens are back in the pool.
-        let needed_delta_k = position.delta_k;
-        let delta_from_tokens: u128 = total_x
-            .checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+        // Transfer restore amount to vault
+        token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.position_token_account.to_account_info(),
+                    to: ctx.accounts.token_y_vault.to_account_info(),
+                    authority: ctx.accounts.position.to_account_info(),
+                },
+                position_signer,
+            ),
+            restore_amount_u64,
+        )?;
 
-        let mut sol_required_u128: u128 = 0u128;
-        if needed_delta_k > delta_from_tokens {
-            let remainder = needed_delta_k
-                .checked_sub(delta_from_tokens)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            let denominator = total_y
-                .checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-
-            // ceil division to ensure invariant is over-collateralised by at most 1 lamport
-            sol_required_u128 = (remainder + denominator - 1) / denominator;
-        }
-
-        // Perform SOL transfer from liquidator to pool if needed
-        if sol_required_u128 > 0 {
-            if sol_required_u128 > u64::MAX as u128 {
-                return Err(error!(WhiplashError::MathOverflow));
-            }
-            let sol_required: u64 = sol_required_u128 as u64;
-
-            let ix = anchor_lang::solana_program::system_instruction::transfer(
-                &ctx.accounts.liquidator.key(),
-                &ctx.accounts.pool.key(),
-                sol_required,
-            );
-            anchor_lang::solana_program::program::invoke(
-                &ix,
-                &[
-                    ctx.accounts.liquidator.to_account_info(),
-                    ctx.accounts.pool.to_account_info(),
-                ],
+        // 2. Transfer liquidator reward to liquidator
+        if liquidator_reward > 0 {
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.position_token_account.to_account_info(),
+                        to: ctx.accounts.liquidator_reward_account.to_account_info(),
+                        authority: ctx.accounts.position.to_account_info(),
+                    },
+                    position_signer,
+                ),
+                liquidator_reward,
             )?;
-
-            // Update pool SOL reserves
-            ctx.accounts.pool.lamports = ctx.accounts.pool.lamports
-                .checked_add(sol_required)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
         }
-
-        // Update pool token reserves (after SOL handling to avoid double-borrow)
-        ctx.accounts.pool.token_y_amount = ctx.accounts.pool.token_y_amount
-            .checked_add(position_size)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+        
+        // 3. Update pool state
+        {
+            let pool = &mut ctx.accounts.pool;
+            pool.token_y_amount = pool.token_y_amount
+                .checked_add(restore_amount_u64)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+            pool.leveraged_token_y_amount = pool.leveraged_token_y_amount
+                .checked_sub(position.leveraged_token_amount)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
+        }
     } else {
-        // Short position: transfer SOL from position back to pool
-        // Store key references to avoid temporary value issues
-        let position_token_account_info = ctx.accounts.position_token_account.to_account_info();
-        let pool_info = ctx.accounts.pool.to_account_info();
+        // SHORT POSITION LIQUIDATION
         
-        let position_lamports = position_token_account_info.lamports();
-        let pool_lamports = pool_info.lamports();
+        // For short positions, the position holds SOL. We need to:
+        // 1. Send restore amount to pool
+        // 2. Send reward to liquidator
+        // 3. Update pool accounting
+
+        let position_account_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
         
-        // Calculate new lamport values
-        let new_position_lamports = position_lamports.checked_sub(position_size)
+        // Ensure position has enough lamports
+        require!(
+            position_account_lamports >= position_size,
+            WhiplashError::InsufficientFunds
+        );
+
+        // Transfer restore amount to pool
+        let pool_starting_lamports = ctx.accounts.pool.to_account_info().lamports();
+        let position_starting_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
+        
+        **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = pool_starting_lamports
+            .checked_add(restore_amount_u64)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        let new_pool_lamports = pool_lamports.checked_add(position_size)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+        **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = position_starting_lamports
+            .checked_sub(restore_amount_u64)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // Transfer liquidator reward to liquidator if any
+        if liquidator_reward > 0 {
+            let liquidator_starting_lamports = ctx.accounts.liquidator_reward_account.to_account_info().lamports();
+            let position_current_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
+            
+            **ctx.accounts.liquidator_reward_account.to_account_info().try_borrow_mut_lamports()? = liquidator_starting_lamports
+                .checked_add(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+                
+            **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = position_current_lamports
+                .checked_sub(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
+        }
         
-        // Update lamports
-        **position_token_account_info.try_borrow_mut_lamports()? = new_position_lamports;
-        **pool_info.try_borrow_mut_lamports()? = new_pool_lamports;
-        
-        // Update pool SOL reserves
-        ctx.accounts.pool.lamports = ctx.accounts.pool.lamports
-            .checked_add(position_size)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+        // Update pool state
+        {
+            let pool = &mut ctx.accounts.pool;
+            pool.lamports = pool.lamports
+                .checked_add(restore_amount_u64)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+            pool.leveraged_sol_amount = pool.leveraged_sol_amount
+                .checked_sub(position.leveraged_token_amount)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
+        }
     }
-    
+
     // Emit liquidation event
     emit!(PositionLiquidated {
         liquidator: ctx.accounts.liquidator.key(),
@@ -269,11 +311,13 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         pool: ctx.accounts.pool.key(),
         position: ctx.accounts.position.key(),
         position_size,
-        borrowed_amount: 0u64, // No borrowed amount used in the new condition
-        expected_output: 0u64, // No expected output used in the new condition
-        liquidator_reward: 0, // No reward for now
+        borrowed_amount: position.leveraged_token_amount,
+        expected_output: expected_payout as u64,
+        liquidator_reward,
         timestamp: Clock::get()?.unix_timestamp,
     });
-        
+    
+    // Position account is automatically closed due to the close = liquidator constraint
+    
     Ok(())
 } 
