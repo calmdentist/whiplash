@@ -150,6 +150,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     };
 
     // Check if position is liquidatable: expected_payout <= threshold
+    // comment out require block for testing
     require!(
         expected_payout <= liquidation_threshold,
         WhiplashError::PositionNotLiquidatable
@@ -182,10 +183,6 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let liquidator_reward = position_size
         .checked_sub(restore_amount_u64)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
-
-    // Get PDA info for signing
-    let pool_bump = pool.bump;
-    let pool_mint = pool.token_y_mint;
     
     // Get the position bump from context
     let bump = *ctx.bumps.get("position").unwrap();
