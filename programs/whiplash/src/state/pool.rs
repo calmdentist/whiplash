@@ -135,10 +135,19 @@ impl Pool {
         // Check if total reserves (real + virtual) are sufficient
         let total_x = self.lamports.checked_add(self.virtual_sol_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-        let total_y = self.token_y_amount.checked_add(self.virtual_token_y_amount)
+        let total_y = if amount_in as u128 >= threshold_amount_in / 2 {
+            self.token_y_amount.checked_add(self.virtual_token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_add(effective_leveraged_token_y_amount as u64)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+        } else {
+            self.token_y_amount.checked_add(self.virtual_token_y_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+        };
+        // let total_y = self.token_y_amount.checked_add(self.virtual_token_y_amount)
+        //     .ok_or(error!(crate::WhiplashError::MathOverflow))?
+        //     .checked_add(effective_leveraged_token_y_amount as u64)
+        //     .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
         if total_x == 0 || total_y == 0 {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
