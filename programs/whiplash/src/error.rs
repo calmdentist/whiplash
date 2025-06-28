@@ -56,6 +56,9 @@ pub enum WhiplashError {
     #[msg("Invalid leverage")]
     InvalidLeverage,
 
+    #[msg("Delta K overload")]
+    DeltaKOverload,
+
     #[msg("Position cannot be closed (would require liquidation)")]
     PositionNotClosable,
 } 

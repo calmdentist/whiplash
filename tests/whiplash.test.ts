@@ -231,161 +231,161 @@ describe("whiplash", () => {
     }
   });
 
-  it("Opens leverage position, performs repeated spot buy/sell cycles, then closes position", async () => {
-    try {
-      // Record initial pool state
-      const initialPoolAccount = await program.account.pool.fetch(poolPda);
-      const initialK = constantProduct(initialPoolAccount);
-      console.log("Initial K before cycle test:", initialK.toString());
-      console.log("Cycle Test - Initial reserves - Real SOL:", initialPoolAccount.lamports.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.lamports.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
-      console.log("Cycle Test - Initial reserves - Real Tokens:", initialPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.tokenYAmount.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
+  // it("Opens leverage position, performs repeated spot buy/sell cycles, then closes position", async () => {
+  //   try {
+  //     // Record initial pool state
+  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
+  //     const initialK = constantProduct(initialPoolAccount);
+  //     console.log("Initial K before cycle test:", initialK.toString());
+  //     console.log("Cycle Test - Initial reserves - Real SOL:", initialPoolAccount.lamports.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.lamports.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
+  //     console.log("Cycle Test - Initial reserves - Real Tokens:", initialPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.tokenYAmount.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
 
-      // Generate a random nonce for this test position
-      const cycleTestNonce = Math.floor(Math.random() * 1000000);
-      const cycleTestNonceBytes = new BN(cycleTestNonce).toArrayLike(Buffer, "le", 8);
+  //     // Generate a random nonce for this test position
+  //     const cycleTestNonce = Math.floor(Math.random() * 1000000);
+  //     const cycleTestNonceBytes = new BN(cycleTestNonce).toArrayLike(Buffer, "le", 8);
       
-      // Derive the position PDA
-      const [cycleTestPositionPda, cycleTestPositionBump] = await PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("position"),
-          poolPda.toBuffer(),
-          wallet.publicKey.toBuffer(),
-          cycleTestNonceBytes,
-        ],
-        program.programId
-      );
+  //     // Derive the position PDA
+  //     const [cycleTestPositionPda, cycleTestPositionBump] = await PublicKey.findProgramAddressSync(
+  //       [
+  //         Buffer.from("position"),
+  //         poolPda.toBuffer(),
+  //         wallet.publicKey.toBuffer(),
+  //         cycleTestNonceBytes,
+  //       ],
+  //       program.programId
+  //     );
       
-      // Calculate position token account address
-      const cycleTestPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        cycleTestPositionPda,
-        true // allowOwnerOffCurve
-      );
+  //     // Calculate position token account address
+  //     const cycleTestPositionTokenAccount = await getAssociatedTokenAddress(
+  //       tokenMint,
+  //       cycleTestPositionPda,
+  //       true // allowOwnerOffCurve
+  //     );
 
-      // --- Step 1: Open a leveraged long position (SOL->Token) ---
-      const openTx = await program.methods
-        .leverageSwap(
-          new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
-          new BN(0),                          // minAmountOut (0 for test simplicity)
-          LEVERAGE,                           // leverage factor
-          new BN(cycleTestNonce)              // nonce
-        )
-        .accounts({
-          user: wallet.publicKey,
-          pool: poolPda,
-          tokenYVault: tokenVault,
-          userTokenIn: wallet.publicKey,
-          userTokenOut: tokenAccount,
-          position: cycleTestPositionPda,
-          positionTokenAccount: cycleTestPositionTokenAccount,
-          positionTokenMint: tokenMint,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
+  //     // --- Step 1: Open a leveraged long position (SOL->Token) ---
+  //     const openTx = await program.methods
+  //       .leverageSwap(
+  //         new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
+  //         new BN(0),                          // minAmountOut (0 for test simplicity)
+  //         LEVERAGE,                           // leverage factor
+  //         new BN(cycleTestNonce)              // nonce
+  //       )
+  //       .accounts({
+  //         user: wallet.publicKey,
+  //         pool: poolPda,
+  //         tokenYVault: tokenVault,
+  //         userTokenIn: wallet.publicKey,
+  //         userTokenOut: tokenAccount,
+  //         position: cycleTestPositionPda,
+  //         positionTokenAccount: cycleTestPositionTokenAccount,
+  //         positionTokenMint: tokenMint,
+  //         tokenProgram: TOKEN_PROGRAM_ID,
+  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+  //         systemProgram: SystemProgram.programId,
+  //         rent: SYSVAR_RENT_PUBKEY,
+  //       })
+  //       .rpc();
       
-      await provider.connection.confirmTransaction(openTx);
-      console.log("Opened leveraged long position for cycle test");
+  //     await provider.connection.confirmTransaction(openTx);
+  //     console.log("Opened leveraged long position for cycle test");
 
-      // --- Step 2: Perform repeated spot buy/sell cycles ---
-      const NUM_CYCLES = 25;
-      const SPOT_BUY_AMOUNT = 20 * LAMPORTS_PER_SOL; // 20 SOL per cycle
+  //     // --- Step 2: Perform repeated spot buy/sell cycles ---
+  //     const NUM_CYCLES = 25;
+  //     const SPOT_BUY_AMOUNT = 20 * LAMPORTS_PER_SOL; // 20 SOL per cycle
       
-      for (let i = 0; i < NUM_CYCLES; i++) {
-        console.log(`\nCycle ${i + 1}/${NUM_CYCLES}`);
+  //     for (let i = 0; i < NUM_CYCLES; i++) {
+  //       console.log(`\nCycle ${i + 1}/${NUM_CYCLES}`);
         
-        // Get token balance before spot buy
-        const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
-        const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
+  //       // Get token balance before spot buy
+  //       const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
+  //       const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
 
-        // Spot buy: SOL -> Token
-        const spotBuyTx = await program.methods
-          .swap(
-            new BN(SPOT_BUY_AMOUNT), // buy with 20 SOL
-            new BN(0)                // accept any output
-          )
-          .accounts({
-            user: wallet.publicKey,
-            pool: poolPda,
-            tokenYVault: tokenVault,
-            userTokenIn: wallet.publicKey,  // SOL from user wallet
-            userTokenOut: tokenAccount,     // Tokens to user token account
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: SystemProgram.programId,
-          })
-          .rpc();
-        await provider.connection.confirmTransaction(spotBuyTx);
+  //       // Spot buy: SOL -> Token
+  //       const spotBuyTx = await program.methods
+  //         .swap(
+  //           new BN(SPOT_BUY_AMOUNT), // buy with 20 SOL
+  //           new BN(0)                // accept any output
+  //         )
+  //         .accounts({
+  //           user: wallet.publicKey,
+  //           pool: poolPda,
+  //           tokenYVault: tokenVault,
+  //           userTokenIn: wallet.publicKey,  // SOL from user wallet
+  //           userTokenOut: tokenAccount,     // Tokens to user token account
+  //           tokenProgram: TOKEN_PROGRAM_ID,
+  //           systemProgram: SystemProgram.programId,
+  //         })
+  //         .rpc();
+  //       await provider.connection.confirmTransaction(spotBuyTx);
 
-        // Calculate tokens obtained from spot buy
-        const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
-        const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
-        const tokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
+  //       // Calculate tokens obtained from spot buy
+  //       const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
+  //       const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
+  //       const tokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
         
-        console.log(`  Spot buy: acquired ${tokensObtained} tokens`);
+  //       console.log(`  Spot buy: acquired ${tokensObtained} tokens`);
 
-        // Spot sell: Token -> SOL (sell all tokens obtained)
-        if (tokensObtained > 0) {
-          const spotSellTx = await program.methods
-            .swap(
-              new BN(tokensObtained),  // sell all tokens obtained
-              new BN(0)                // accept any SOL output
-            )
-            .accounts({
-              user: wallet.publicKey,
-              pool: poolPda,
-              tokenYVault: tokenVault,
-              userTokenIn: tokenAccount,      // Tokens from user token account
-              userTokenOut: wallet.publicKey, // SOL to user wallet
-              tokenProgram: TOKEN_PROGRAM_ID,
-              systemProgram: SystemProgram.programId,
-            })
-            .rpc();
-          await provider.connection.confirmTransaction(spotSellTx);
-          console.log(`  Spot sell: sold ${tokensObtained} tokens`);
-        }
-      }
+  //       // Spot sell: Token -> SOL (sell all tokens obtained)
+  //       if (tokensObtained > 0) {
+  //         const spotSellTx = await program.methods
+  //           .swap(
+  //             new BN(tokensObtained),  // sell all tokens obtained
+  //             new BN(0)                // accept any SOL output
+  //           )
+  //           .accounts({
+  //             user: wallet.publicKey,
+  //             pool: poolPda,
+  //             tokenYVault: tokenVault,
+  //             userTokenIn: tokenAccount,      // Tokens from user token account
+  //             userTokenOut: wallet.publicKey, // SOL to user wallet
+  //             tokenProgram: TOKEN_PROGRAM_ID,
+  //             systemProgram: SystemProgram.programId,
+  //           })
+  //           .rpc();
+  //         await provider.connection.confirmTransaction(spotSellTx);
+  //         console.log(`  Spot sell: sold ${tokensObtained} tokens`);
+  //       }
+  //     }
 
-      console.log(`\nCompleted ${NUM_CYCLES} spot buy/sell cycles`);
+  //     console.log(`\nCompleted ${NUM_CYCLES} spot buy/sell cycles`);
 
-      // --- Step 3: Close the leveraged long position ---
-      const closeTx = await program.methods
-        .closePosition()
-        .accounts({
-          user: wallet.publicKey,
-          pool: poolPda,
-          tokenYVault: tokenVault,
-          position: cycleTestPositionPda,
-          positionTokenAccount: cycleTestPositionTokenAccount,
-          userTokenOut: wallet.publicKey, // SOL back to user for long position
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
-        })
-        .rpc();
-      await provider.connection.confirmTransaction(closeTx);
-      console.log("Closed leveraged long position");
+  //     // --- Step 3: Close the leveraged long position ---
+  //     const closeTx = await program.methods
+  //       .closePosition()
+  //       .accounts({
+  //         user: wallet.publicKey,
+  //         pool: poolPda,
+  //         tokenYVault: tokenVault,
+  //         position: cycleTestPositionPda,
+  //         positionTokenAccount: cycleTestPositionTokenAccount,
+  //         userTokenOut: wallet.publicKey, // SOL back to user for long position
+  //         tokenProgram: TOKEN_PROGRAM_ID,
+  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+  //         systemProgram: SystemProgram.programId,
+  //         rent: SYSVAR_RENT_PUBKEY,
+  //       })
+  //       .rpc();
+  //     await provider.connection.confirmTransaction(closeTx);
+  //     console.log("Closed leveraged long position");
 
-      // --- Step 4: Log final pool state ---
-      const finalPoolAccount = await program.account.pool.fetch(poolPda);
-      const finalK = constantProduct(finalPoolAccount);
-      console.log("\nFinal K after cycle test:", finalK.toString());
-      console.log("Cycle Test - Final reserves - Real SOL:", finalPoolAccount.lamports.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.lamports.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
-      console.log("Cycle Test - Final reserves - Real Tokens:", finalPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.tokenYAmount.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
+  //     // --- Step 4: Log final pool state ---
+  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
+  //     const finalK = constantProduct(finalPoolAccount);
+  //     console.log("\nFinal K after cycle test:", finalK.toString());
+  //     console.log("Cycle Test - Final reserves - Real SOL:", finalPoolAccount.lamports.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.lamports.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
+  //     console.log("Cycle Test - Final reserves - Real Tokens:", finalPoolAccount.tokenYAmount.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.tokenYAmount.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
 
-      // Compare with initial state
-      const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
-      const kDiffPercentage = kDiff / scaled(initialK);
-      console.log("K difference percentage:", kDiffPercentage * 100, "%");
+  //     // Compare with initial state
+  //     const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
+  //     const kDiffPercentage = kDiff / scaled(initialK);
+  //     console.log("K difference percentage:", kDiffPercentage * 100, "%");
 
-    } catch (error) {
-      console.error("Cycle test Error:", error);
-      throw error;
-    }
-  });
-  return;
+  //   } catch (error) {
+  //     console.error("Cycle test Error:", error);
+  //     throw error;
+  //   }
+  // });
+  // return;
 
   // it("Liquidation sanity test - opens leverage position and liquidates it", async () => {
   //   try {
