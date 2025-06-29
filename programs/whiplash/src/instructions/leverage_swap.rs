@@ -79,9 +79,9 @@ pub fn handle_leverage_swap(
         return Err(error!(WhiplashError::ZeroSwapAmount));
     }
 
-    // Validate leverage (max 5x = 50)
+    // Validate leverage (max 10x = 100)
     require!(
-        leverage >= 10 && leverage <= 50,
+        leverage >= 10 && leverage <= 100,
         WhiplashError::InvalidLeverage
     );
     
@@ -177,7 +177,7 @@ pub fn handle_leverage_swap(
         .checked_sub(k_after)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
     
-    // Validate delta_k is at most 5% of current k
+    // Validate delta_k is at most 10% of current k
     let max_delta_k = k_before
         .checked_mul(10)
         .ok_or(error!(WhiplashError::MathOverflow))?
