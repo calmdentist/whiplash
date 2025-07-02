@@ -87,11 +87,8 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         // Y → X path – compute with and without soft boundary.
         let amount_out_soft = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, true)?;
         let amount_out_plain = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, false)?;
-        let prem = if amount_out_plain > amount_out_soft {
-            amount_out_plain - amount_out_soft
-        } else {
-            0u64
-        };
+        // Plain quote ignores leveraged debt, so it should be >= soft quote.
+        let prem = amount_out_plain.saturating_sub(amount_out_soft); //saturating_sub may not be necessary, just in case for rounding errors.
         (amount_out_soft, prem)
     };
     

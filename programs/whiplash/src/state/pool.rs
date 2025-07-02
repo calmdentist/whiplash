@@ -115,8 +115,7 @@ impl Pool {
                 self.lamports,
                 self.virtual_sol_amount,
                 self.token_y_amount,
-                self.virtual_token_y_amount,
-                self.leveraged_token_y_amount,
+                self.virtual_token_y_amount
             );
         }
 
@@ -261,8 +260,7 @@ impl Pool {
         lamports: u64,
         virtual_sol: u64,
         token_y_amount: u64,
-        virtual_token_y_amount: u64,
-        leveraged_token_y_amount: u64,
+        virtual_token_y_amount: u64
     ) -> Result<u64> {
         if amount_in == 0 {
             return Err(error!(crate::WhiplashError::ZeroSwapAmount));
@@ -272,8 +270,6 @@ impl Pool {
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         let total_y = token_y_amount
             .checked_add(virtual_token_y_amount)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?
-            .checked_add(leveraged_token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
 
         if total_x == 0 || total_y == 0 {
