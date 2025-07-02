@@ -94,61 +94,71 @@ impl Pool {
         Ok(amount_out)
     }
     
-    // Calculates the amount of SOL to receive when swapping token Y
-    pub fn calculate_swap_y_to_x(&self, amount_in: u64) -> Result<u64> {
+    // Calculates the amount of SOL (token X) to receive when swapping in token Y.
+    // `apply_soft_boundary` decides whether we apply the dynamic soft–boundary logic
+    // (quadratic interpolation that partially offsets `leveraged_token_y_amount`).
+    // Passing `false` produces a plain constant-product quote that includes the
+    // *entire* `leveraged_token_y_amount` – this is useful for measuring the
+    // premium that the soft boundary charges so we can retire virtual SOL.
+    pub fn calculate_swap_y_to_x(&self, amount_in: u64, apply_soft_boundary: bool) -> Result<u64> {
         if amount_in == 0 {
             return Err(error!(crate::WhiplashError::ZeroSwapAmount));
         }
 
-        // Calculate threshold amount_in s.t. output = real sol reserve
-        let threshold_amount_in = self.token_y_amount as u128 * self.lamports as u128 / self.virtual_sol_amount as u128;
-        // not sure if this is needed
+        // Short-circuit to the simple constant-product path when either:
+        //   1. `apply_soft_boundary` is false (used for premium calculation), or
+        //   2. `virtual_sol_amount` is zero – once the virtual reserve is gone we
+        //      no longer need the soft boundary.
+        if !apply_soft_boundary || self.virtual_sol_amount == 0 {
+            return Self::calculate_swap_y_to_x_plain(
+                amount_in,
+                self.lamports,
+                self.virtual_sol_amount,
+                self.token_y_amount,
+                self.virtual_token_y_amount,
+                self.leveraged_token_y_amount,
+            );
+        }
+
+        // -----------------------------
+        // Soft-boundary logic (original)
+        // -----------------------------
+
+        // Calculate threshold amount_in s.t. output equals the real SOL reserve.
+        let threshold_amount_in = (self.token_y_amount as u128)
+            .checked_mul(self.lamports as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(self.virtual_sol_amount as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
         if threshold_amount_in > u64::MAX as u128 {
             return Err(error!(crate::WhiplashError::MathOverflow));
         }
 
-        let effective_leveraged_token_y_amount = if amount_in as u128 >= threshold_amount_in {
+        // Quadratic interpolation of leveraged debt.
+        let effective_leveraged_token_y_amount: u128 = if amount_in as u128 >= threshold_amount_in {
             self.leveraged_token_y_amount as u128
         } else {
-            // Manual 256-bit arithmetic to handle intermediate overflows
+            // amount_in^2 * leveraged_token_y_amount / threshold_amount_in^2
             let amount_in_u128 = amount_in as u128;
-            let leveraged_token_y_u128 = self.leveraged_token_y_amount as u128;
-            
-            // Calculate amount_in^2
             let amount_in_squared = amount_in_u128 * amount_in_u128;
-            
-            // Calculate threshold_amount_in^2
             let threshold_squared = threshold_amount_in * threshold_amount_in;
-            
-            // Perform 128-bit × 128-bit → 256-bit multiplication
-            // amount_in_squared * leveraged_token_y_u128
-            let (numerator_low, numerator_high) = Self::mul_u128_to_u256(amount_in_squared, leveraged_token_y_u128);
-            
-            // Perform 256-bit ÷ 128-bit → 128-bit division
-            Self::div_u256_by_u128(numerator_high, numerator_low, threshold_squared)
+            let (num_low, num_high) = Self::mul_u128_to_u256(amount_in_squared, self.leveraged_token_y_amount as u128);
+            Self::div_u256_by_u128(num_high, num_low, threshold_squared)
         };
-        
-        msg!("effective_leveraged_token_y_amount: {}", effective_leveraged_token_y_amount);
-        msg!("leveraged_token_y_amount: {}", self.leveraged_token_y_amount);
-        msg!("threshold_amount_in: {}", threshold_amount_in);
-        
-        // Check if total reserves (real + virtual) are sufficient
-        let total_x = self.lamports.checked_add(self.virtual_sol_amount)
+
+        // Assemble reserves with the soft boundary logic
+        let total_x = self
+            .lamports
+            .checked_add(self.virtual_sol_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-        let total_y = if amount_in as u128 >= threshold_amount_in / 2 {
-            self.token_y_amount.checked_add(self.virtual_token_y_amount)
+
+        let total_y = self.token_y_amount
+            .checked_add(self.virtual_token_y_amount)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_add(effective_leveraged_token_y_amount as u64)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?
-        } else {
-            self.token_y_amount.checked_add(self.virtual_token_y_amount)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?
-        };
-        // let total_y = self.token_y_amount.checked_add(self.virtual_token_y_amount)
-        //     .ok_or(error!(crate::WhiplashError::MathOverflow))?
-        //     .checked_add(effective_leveraged_token_y_amount as u64)
-        //     .ok_or(error!(crate::WhiplashError::MathOverflow))?;
-            
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
         if total_x == 0 || total_y == 0 {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
@@ -242,5 +252,60 @@ impl Pool {
         }
         
         quotient
+    }
+
+    // Helper that returns the plain constant-product quote (no soft boundary).
+    #[inline(always)]
+    fn calculate_swap_y_to_x_plain(
+        amount_in: u64,
+        lamports: u64,
+        virtual_sol: u64,
+        token_y_amount: u64,
+        virtual_token_y_amount: u64,
+        leveraged_token_y_amount: u64,
+    ) -> Result<u64> {
+        if amount_in == 0 {
+            return Err(error!(crate::WhiplashError::ZeroSwapAmount));
+        }
+
+        let total_x = lamports.checked_add(virtual_sol)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        let total_y = token_y_amount
+            .checked_add(virtual_token_y_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_add(leveraged_token_y_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
+        if total_x == 0 || total_y == 0 {
+            return Err(error!(crate::WhiplashError::InsufficientLiquidity));
+        }
+
+        let y_after = (total_y as u128)
+            .checked_add(amount_in as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
+        let numerator = (total_x as u128)
+            .checked_mul(total_y as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
+        let mut x_reserve_after = numerator
+            .checked_div(y_after)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
+        // Round up to avoid k deficit
+        if numerator % y_after != 0 {
+            x_reserve_after = x_reserve_after
+                .checked_add(1u128)
+                .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        }
+
+        if x_reserve_after > u64::MAX as u128 {
+            return Err(error!(crate::WhiplashError::MathOverflow));
+        }
+
+        let amount_out = total_x.checked_sub(x_reserve_after as u64)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+
+        Ok(amount_out)
     }
 } 

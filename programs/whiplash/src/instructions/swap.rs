@@ -77,18 +77,26 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         );
     }
     
-    // Calculate the output amount based on the constant product formula
-    let amount_out = if is_sol_to_y {
-        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
+    // --------------------------------------------------
+    // Calculate output & soft-boundary premium (Y → X)
+    // --------------------------------------------------
+    let (amount_out, premium) = if is_sol_to_y {
+        // X → Y path – no soft boundary / premium logic needed.
+        (ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?, 0u64)
     } else {
-        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
+        // Y → X path – compute with and without soft boundary.
+        let amount_out_soft = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, true)?;
+        let amount_out_plain = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, false)?;
+        let prem = if amount_out_plain > amount_out_soft {
+            amount_out_plain - amount_out_soft
+        } else {
+            0u64
+        };
+        (amount_out_soft, prem)
     };
     
-    // Check minimum output amount
-    require!(
-        amount_out >= min_amount_out,
-        WhiplashError::SlippageToleranceExceeded
-    );
+    // Check minimum output amount against the user-facing value (with soft boundary).
+    require!(amount_out >= min_amount_out, WhiplashError::SlippageToleranceExceeded);
     
     // Handle token transfers
     if is_sol_to_y {
@@ -167,6 +175,13 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.lamports = pool.lamports.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
+
+        // Use the premium to retire virtual SOL reserve.
+        if premium > 0 && pool.virtual_sol_amount > 0 {
+            let repay = premium.min(pool.virtual_sol_amount);
+            pool.virtual_sol_amount -= repay;
+            // No lamport change needed – the premium already stayed in `pool.lamports`.
+        }
     }
     
     // Emit swap event
