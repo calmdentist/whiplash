@@ -12,7 +12,7 @@ pub use error::*;
 pub use events::*;
 pub use utils::*;
 
-declare_id!("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
+declare_id!("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
 
 #[program]
 pub mod whiplash {

@@ -78,7 +78,7 @@ async function main() {
     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
     // Verify Whiplash program is deployed
-    const whiplashProgramId = new PublicKey("GHjAHPHGZocJKtxUhe3Eom5B73AF4XGXYukV4QMMDNhZ");
+    const whiplashProgramId = new PublicKey("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
     const whiplashProgramInfo = await provider.connection.getAccountInfo(whiplashProgramId);
     if (!whiplashProgramInfo || !whiplashProgramInfo.executable) {
       throw new Error("Whiplash program is not deployed or not executable");
