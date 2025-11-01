@@ -30,6 +30,9 @@ pub struct Position {
     // The stored delta_k value needed to restore the pool invariant
     pub delta_k: u128,
 
+    // A snapshot of the cumulative_funding_rate_index from the Pool when this position was opened
+    pub entry_funding_rate_index: u128,
+
     // The leveraged token amount (output amount - collateral output amount)
     pub leveraged_token_amount: u64,
 

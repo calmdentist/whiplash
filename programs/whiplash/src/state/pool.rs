@@ -32,6 +32,22 @@ pub struct Pool {
 
     // Creation timestamp
     pub creation_timestamp: u64,
+
+    // ----- Funding Rate fields -----
+    // The original constant product of the pool, set at launch
+    pub original_k: u128,
+
+    // The sum of delta_k from all open leveraged positions
+    pub total_delta_k: u128,
+
+    // The last time the funding rate was updated
+    pub last_funding_timestamp: i64,
+
+    // A continuously increasing value representing the total funding rate accrued per unit of delta_k
+    pub cumulative_funding_rate_index: u128,
+
+    // The total accrued fees owed to the pool from all leveraged positions, denominated in the base asset
+    pub unrealized_funding_fees: u128,
     
     // Bump seed for PDA derivation
     pub bump: u8,
