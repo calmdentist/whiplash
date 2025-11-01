@@ -1,25 +1,30 @@
-\documentclass[11pt]{article}
-\usepackage[utf8]{inputenc}
-\usepackage{amsmath,amssymb,amsthm}
-\usepackage{algorithm}
-\usepackage{algorithmic}
-\usepackage{listings}
-\usepackage{graphicx}
-\usepackage{hyperref}
-\usepackage{geometry}
-\usepackage{tikz}
-\usepackage{xcolor}
-\geometry{letterpaper, margin=1in}
+\documentclass[11pt, a4paper]{article}
 
-\definecolor{whiplashpurple}{RGB}{128, 0, 128}
+% --- UNIVERSAL PREAMBLE BLOCK ---
+% Set geometry for sensible margins
+\usepackage[a4paper, top=2.5cm, bottom=2.5cm, left=2cm, right=2cm]{geometry}
 
-\hypersetup{
-    colorlinks=true,
-    linkcolor=whiplashpurple,
-    filecolor=whiplashpurple,
-    urlcolor=whiplashpurple,
-    citecolor=whiplashpurple
-}
+% Load font and language packages
+\usepackage{fontspec}
+\usepackage[english, bidi=basic, provide=*]{babel}
+
+% Provide the main language (English)
+\babelprovide[import, onchar=ids fonts]{english}
+
+% Set default/Latin font to Sans Serif in the main (rm) slot
+% Noto Sans is clean and modern, good for a whitepaper.
+\babelfont{rm}{Noto Sans}
+% --- END UNIVERSAL PREAMBLE BLOCK ---
+
+% --- Additional Packages ---
+\usepackage{amsmath} % For math notation like P(A)
+\usepackage{booktabs} % For professional tables
+\usepackage{graphicx} % For placeholder box
+\usepackage{titling} % For author/title formatting
+\usepackage{parskip} % Removes paragraph indentation and adds space between them
+
+% --- hidelinks MUST be the last package loaded ---
+\usepackage[hidelinks]{hyperref}
 
 \title{\textbf{Whiplash: A Novel AMM for Unified Spot and Leverage Trading}}
 \author{
@@ -148,22 +153,87 @@ This payout, $X_{\text{out}}$, includes the user's initial collateral plus any p
 
 Upon closing, the borrowed amount originally associated with the position ($\Delta y_l$ or a corresponding $\Delta x_l$) is subtracted from the pool's total leveraged debt ($y_l$ or $x_l$), ensuring the system's accounting for total debt remains accurate.
 
+\section{Global LP Funding Rate}
+To address the temporary reduction in effective liquidity caused by open leveraged positions, Whiplash implements a "global LP funding rate". This mechanism requires leverage traders to pay a continuous funding fee to the liquidity pool, compensating LPs and spot traders for the risk and reduced liquidity associated with the borrowed capital. The funding rate is designed to be non-linear, increasing quadratically with the total amount of leverage in the system, creating a strong incentive to keep the pool in a healthy state.
+
+\subsection{Funding Rate Formula}
+The funding rate is a function of the \emph{delta\_k ratio} ($r$), which is the ratio of the total $\Delta k$ from all open leveraged positions to the pool's original constant product, $k_{\text{original}}$.
+
+\begin{equation}
+    \text{FundingRate}(r) = C \cdot \left( \frac{r}{1 - r} \right)^2
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $r = \frac{\sum \Delta k_i}{k_{\text{original}}}$
+    \item $C$ is a configurable constant that scales the rate.
+\end{itemize}
+
+This function ensures that the funding rate is zero when there is no leverage ($r=0$) and approaches infinity as the total $\Delta k$ approaches the original $k$ ($r \to 1$). This creates a powerful "soft" cap on the total leverage the system can support.
+
+\subsection{Implementation via Cumulative Index}
+To implement this efficiently, the protocol avoids iterating over positions by using two global accumulators:
+\begin{enumerate}
+    \item \textbf{Unrealized Funding Fees}: A global counter, $\text{unrealized\_fees}$, tracks the total fees owed to the pool. On any interaction, it's updated:
+    \begin{equation}
+        \Delta \text{unrealized\_fees} = \text{FundingRate}(r) \cdot (\sum \Delta k_i) \cdot \Delta t
+    \end{equation}
+    \item \textbf{Cumulative Funding Rate Index}: To calculate the fees for a single position, the protocol maintains a cumulative index, $I(t)$, which represents the integral of the funding rate over time. It is updated as follows:
+    \begin{equation}
+        I(t_{\text{new}}) = I(t_{\text{old}}) + \text{FundingRate}(r) \cdot \Delta t
+    \end{equation}
+\end{enumerate}
+When a position is opened, the current value of $I(t)$ is stored with the position.
+
+\subsection{Real-Time Benefits for Spot Traders}
+Spot traders receive the benefit of these accrued fees in real-time. For every swap, the protocol calculates an \emph{effective k} that includes the unrealized fees:
+
+\begin{equation}
+    k_{\text{effective}} = k_{\text{current}} + \text{unrealized\_funding\_fees} \cdot y_{\text{current}}
+\end{equation}
+
+This $k_{\text{effective}}$ is used in the pricing formula, providing better execution for spot traders as if the fees had already been paid into the pool's reserves.
+
+\subsection{Position Settlement}
+When a leverage trader closes their position, the protocol accounts for the funding fees they've paid over the lifetime of the position. These fees are treated as a direct repayment of the position's impact on the pool's invariant, $\Delta k$. This ensures the final settlement is equitable and mathematically precise.
+
+The settlement process is as follows:
+\begin{enumerate}
+    \item The total funding fees owed by the position, $\text{funding\_due}$, are calculated by differencing the cumulative index and multiplying by the position's $\Delta k$:
+    \begin{equation}
+        \text{funding\_due} = (I(t_{\text{close}}) - I(t_{\text{open}})) \cdot \Delta k_{\text{position}}
+    \end{equation}
+    \item These fees, denominated in the base asset, are converted into their equivalent $\Delta k$ value:
+    \begin{equation}
+        \Delta k_{\text{repaid}} = \text{funding\_due} \cdot y_{\text{current}}
+    \end{equation}
+    \item The effective $\Delta k$ for the position is calculated by subtracting the repaid portion:
+    \begin{equation}
+        \Delta k_{\text{effective}} = \Delta k_{\text{original}} - \Delta k_{\text{repaid}}
+    \end{equation}
+    \item This effective $\Delta k$ is used in the final payout formula, which for a long position is:
+    \begin{equation}
+        X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k_{\text{effective}}}{y_{\text{current}} + y_{\text{position}}}
+    \end{equation}
+\end{enumerate}
+This final payout, $X_{\text{out}}$, already incorporates the fees, so no further subtraction is needed. The collected $\text{funding\_due}$ is then officially "realized" by adding it to the pool's base asset reserves, permanently increasing $k_{\text{current}}$.
+
 \section{Liquidation Mechanism}
 
-The liquidation mechanism incentivizes liquidators with a reward for closing underwater positions while restoring the pool's invariant. This approach ensures efficient liquidation of risky positions while providing clear economic incentives for liquidators.
+The liquidation mechanism incentivizes liquidators with a reward for closing underwater positions while restoring the pool's invariant. This approach ensures efficient liquidation of risky positions while providing clear economic incentives for liquidators. The calculations incorporate the effective $\Delta k$ to account for any funding fees paid by the position.
 
 \subsection{Liquidation Condition}
 
-A position becomes \textbf{liquidatable} when the expected payout from closing the position is insufficient to restore the stored $\Delta k$ with a 5\% buffer. For long positions, the condition is:
+A position becomes \textbf{liquidatable} when the expected payout from closing the position is insufficient to restore the stored $\Delta k_{\text{effective}}$ with a 5\% buffer. For long positions, the condition is:
 
 \begin{equation}
-X_{\text{out}} \leq \frac{\Delta k}{x_{\text{current}}} \times 1.05
+X_{\text{out}} \leq \frac{\Delta k_{\text{effective}}}{x_{\text{current}}} \times 1.05
 \end{equation}
 
-where $X_{\text{out}}$ is the payout the position would receive from a normal close, calculated as:
+where $X_{\text{out}}$ is the payout the position would receive from a normal close, calculated using $\Delta k_{\text{effective}}$:
 
 \begin{equation}
-X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k}{y_{\text{current}} + y_{\text{position}}}
+X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k_{\text{effective}}}{y_{\text{current}} + y_{\text{position}}}
 \end{equation}
 
 For short positions, the equivalent condition applies with the roles of base asset and token reversed.
@@ -174,9 +244,9 @@ When a liquidator calls the \texttt{liquidate} instruction, the protocol execute
 
 \begin{enumerate}
     \item The position is closed by returning all $y_{\text{position}}$ tokens to the pool
-    \item The exact quantity needed to restore the invariant is calculated:
+    \item The exact quantity needed to restore the invariant is calculated using the effective $\Delta k$:
     \begin{equation}
-    \Delta y_{\text{restore}} = \frac{\Delta k}{x_{\text{current}}}
+    \Delta y_{\text{restore}} = \frac{\Delta k_{\text{effective}}}{x_{\text{current}}}
     \end{equation}
     \item This amount is transferred to the pool reserves to restore $k$ exactly
     \item Any remaining tokens from the position become the liquidator's reward:
@@ -262,43 +332,6 @@ Extreme scenarios can be avoided by setting limits on the following:
 \\\\
 However, if liquidations were integrated at the protocol level (i.e. swaps liquidate positions that would become underwater), solvency would be guaranteed and effective liquidity could remain constant. This is an ideal scenario - designing such a liquidation mechanism that can stay within the limits of compute usage in smart contracts is very difficult, if possible.
 \\\\
-Future work will involve designing a liquidation engine integrated at the protocol level, and exploring other fundamentally different AMM mechanisms (concentrated liquidity/liquidity bins for example) that create a a net improvement to the protocol.
-
-\section{Global LP Funding Rate}
-To address the temporary reduction in effective liquidity caused by open leveraged positions, Whiplash implements a "global LP funding rate". This mechanism requires leverage traders to pay a continuous funding fee to the liquidity pool, compensating LPs and spot traders for the risk and reduced liquidity associated with the borrowed capital. The funding rate is designed to be non-linear, increasing quadratically with the total amount of leverage in the system, creating a strong incentive to keep the pool in a healthy state.
-
-\subsection{Funding Rate Formula}
-The funding rate is a function of the \emph{delta\_k ratio} ($r$), which is the ratio of the total $\Delta k$ from all open leveraged positions to the pool's original constant product, $k_{\text{original}}$.
-
-\begin{equation}
-    \text{FundingRate}(r) = C \cdot \left( \frac{r}{1 - r} \right)^2
-\end{equation}
-
-where:
-\begin{itemize}
-    \item $r = \frac{\sum \Delta k_i}{k_{\text{original}}}$
-    \item $C$ is a configurable constant that scales the rate.
-\end{itemize}
-
-This function ensures that the funding rate is zero when there is no leverage ($r=0$) and approaches infinity as the total $\Delta k$ approaches the original $k$ ($r \to 1$). This creates a powerful "soft" cap on the total leverage the system can support.
-
-\subsection{Implementation via Cumulative Index}
-To implement this efficiently on-chain without iterating over all open positions, the protocol uses a cumulative funding index. On every pool interaction (swap, open/close position), the protocol calculates the funding accrued since the last interaction and adds it to a global `unrealized_funding_fees` accumulator.
-
-\begin{equation}
-    \text{fees\_accrued} = \text{FundingRate}(r) \cdot (\sum \Delta k_i) \cdot (\text{current\_time} - \text{last\_update\_time})
-\end{equation}
-
-\subsection{Real-Time Benefits for Spot Traders}
-Spot traders receive the benefit of these accrued fees in real-time. For every swap, the protocol calculates an \emph{effective k} that includes the unrealized fees:
-
-\begin{equation}
-    k_{\text{effective}} = k_{\text{current}} + \text{unrealized\_funding\_fees} \cdot y_{\text{current}}
-\end{equation}
-
-This $k_{\text{effective}}$ is used in the pricing formula, providing better execution for spot traders as if the fees had already been paid into the pool's reserves.
-
-\subsection{Position Settlement}
-When a leverage trader closes their position, their share of the accrued funding is calculated using the cumulative index. This amount is subtracted from their final payout and is officially "realized" by adding it to the pool's base asset reserves, permanently increasing $k_{\text{current}}$.
+Future work will involve designing a liquidation engine integrated at the protocol level, and exploring other fundamentally different AMM mechanisms (concentrated liquidity/liquidity bins for example) that create a net improvement to the protocol.
 
 \end{document} 
