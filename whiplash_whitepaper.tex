@@ -262,6 +262,43 @@ Extreme scenarios can be avoided by setting limits on the following:
 \\\\
 However, if liquidations were integrated at the protocol level (i.e. swaps liquidate positions that would become underwater), solvency would be guaranteed and effective liquidity could remain constant. This is an ideal scenario - designing such a liquidation mechanism that can stay within the limits of compute usage in smart contracts is very difficult, if possible.
 \\\\
-Future work will involve designing a liquidation engine integrated at the protocol level, and exploring other fundamentally different AMM mechanisms (concentrated liquidity/liquidity bins for example) that create a net improvement to the protocol.
+Future work will involve designing a liquidation engine integrated at the protocol level, and exploring other fundamentally different AMM mechanisms (concentrated liquidity/liquidity bins for example) that create a a net improvement to the protocol.
+
+\section{Global LP Funding Rate}
+To address the temporary reduction in effective liquidity caused by open leveraged positions, Whiplash implements a "global LP funding rate". This mechanism requires leverage traders to pay a continuous funding fee to the liquidity pool, compensating LPs and spot traders for the risk and reduced liquidity associated with the borrowed capital. The funding rate is designed to be non-linear, increasing quadratically with the total amount of leverage in the system, creating a strong incentive to keep the pool in a healthy state.
+
+\subsection{Funding Rate Formula}
+The funding rate is a function of the \emph{delta\_k ratio} ($r$), which is the ratio of the total $\Delta k$ from all open leveraged positions to the pool's original constant product, $k_{\text{original}}$.
+
+\begin{equation}
+    \text{FundingRate}(r) = C \cdot \left( \frac{r}{1 - r} \right)^2
+\end{equation}
+
+where:
+\begin{itemize}
+    \item $r = \frac{\sum \Delta k_i}{k_{\text{original}}}$
+    \item $C$ is a configurable constant that scales the rate.
+\end{itemize}
+
+This function ensures that the funding rate is zero when there is no leverage ($r=0$) and approaches infinity as the total $\Delta k$ approaches the original $k$ ($r \to 1$). This creates a powerful "soft" cap on the total leverage the system can support.
+
+\subsection{Implementation via Cumulative Index}
+To implement this efficiently on-chain without iterating over all open positions, the protocol uses a cumulative funding index. On every pool interaction (swap, open/close position), the protocol calculates the funding accrued since the last interaction and adds it to a global `unrealized_funding_fees` accumulator.
+
+\begin{equation}
+    \text{fees\_accrued} = \text{FundingRate}(r) \cdot (\sum \Delta k_i) \cdot (\text{current\_time} - \text{last\_update\_time})
+\end{equation}
+
+\subsection{Real-Time Benefits for Spot Traders}
+Spot traders receive the benefit of these accrued fees in real-time. For every swap, the protocol calculates an \emph{effective k} that includes the unrealized fees:
+
+\begin{equation}
+    k_{\text{effective}} = k_{\text{current}} + \text{unrealized\_funding\_fees} \cdot y_{\text{current}}
+\end{equation}
+
+This $k_{\text{effective}}$ is used in the pricing formula, providing better execution for spot traders as if the fees had already been paid into the pool's reserves.
+
+\subsection{Position Settlement}
+When a leverage trader closes their position, their share of the accrued funding is calculated using the cumulative index. This amount is subtracted from their final payout and is officially "realized" by adding it to the pool's base asset reserves, permanently increasing $k_{\text{current}}$.
 
 \end{document} 
