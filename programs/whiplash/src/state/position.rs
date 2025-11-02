@@ -9,9 +9,6 @@ pub struct Position {
     // The pool the position is in
     pub pool: Pubkey,
 
-    // The vault that holds position tokens
-    pub position_vault: Pubkey,
-
     // Whether the position is long or short
     pub is_long: bool,
 
@@ -24,7 +21,7 @@ pub struct Position {
     // The entry price of the position
     pub entry_price: u128,
 
-    // The position size (output token amount)
+    // The position size (virtual token amount owned by this position)
     pub size: u64,
 
     // The stored delta_k value needed to restore the pool invariant

@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
-    associated_token::AssociatedToken,
 };
 use crate::{state::*, events::*, WhiplashError};
 
@@ -43,20 +42,12 @@ pub struct ClosePosition<'info> {
     )]
     pub position: Account<'info, Position>,
     
-    #[account(
-        mut,
-        constraint = position_token_account.key() == position.position_vault @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub position_token_account: Account<'info, TokenAccount>,
-    
     /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
     #[account(mut)]
     pub user_token_out: UncheckedAccount<'info>,
     
     pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
@@ -171,55 +162,28 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     let pool_bump = pool.bump;
     let pool_mint = pool.token_y_mint;
     
-    // Get the position bump from context
-    let bump = *ctx.bumps.get("position").unwrap();
-    let pool_key = ctx.accounts.pool.key();
-    let user_key = ctx.accounts.user.key();
-    let position_nonce = position.nonce;
-    
     // Handle based on position type
+    // Note: Positions are virtual - tokens were never physically transferred out of the pool
     if position.is_long {
-        // LONG POSITION (User holds Y tokens, gets SOL back)
+        // LONG POSITION: User has virtual claim on Y tokens, gets SOL back
         
-        // 1. Transfer tokens from position to vault
-        let nonce_bytes = position_nonce.to_le_bytes();
-        let position_seeds = &[
-            b"position".as_ref(),
-            pool_key.as_ref(),
-            user_key.as_ref(),
-            nonce_bytes.as_ref(),
-            &[bump],
-        ];
-        let position_signer = &[&position_seeds[..]];
-        
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.position_token_account.to_account_info(),
-                    to: ctx.accounts.token_y_vault.to_account_info(),
-                    authority: ctx.accounts.position.to_account_info(),
-                },
-                position_signer,
-            ),
-            position_size,
-        )?;
-        
-        // 2. Update pool state
+        // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
+            // Return the position's virtual tokens to available pool reserves
             pool.token_y_amount = pool.token_y_amount
                 .checked_add(position_size)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
-                
+            
+            // Deduct SOL being paid to the user
             pool.lamports = pool.lamports
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
             
+            // Remove leveraged amounts
             pool.leveraged_token_y_amount -= position.leveraged_token_amount;
             
             // Update funding fee accounting
-            // Realize the funding fees that were collected
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
                 .saturating_sub(funding_due);
             
@@ -228,7 +192,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
                 .saturating_sub(delta_k_original);
         }
         
-        // 3. Transfer SOL to user (direct lamport transfer)
+        // 2. Transfer SOL payout to user (direct lamport transfer from pool)
         let dest_starting_lamports = ctx.accounts.user.lamports();
         let source_account_info = ctx.accounts.pool.to_account_info();
         
@@ -240,16 +204,12 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             .checked_add(user_output)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
-        // SHORT POSITION (User holds SOL, gets Y tokens back)
+        // SHORT POSITION: User has virtual claim on SOL, gets Y tokens back
         
-        // For short positions, we only need to handle the accounting in the pool
-        // and transfer tokens to the user. The SOL in the position account will be
-        // returned to the user when the account is closed.
-        
-        // 1. Update pool state for accounting
+        // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
-            // Record that the SOL has been returned to the pool
+            // Return the position's virtual SOL to available pool reserves
             pool.lamports = pool.lamports
                 .checked_add(position_size)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
@@ -259,10 +219,10 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
 
+            // Remove leveraged amounts
             pool.leveraged_sol_amount -= position.leveraged_token_amount;
             
             // Update funding fee accounting
-            // Realize the funding fees that were collected
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
                 .saturating_sub(funding_due);
             
@@ -271,24 +231,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
                 .saturating_sub(delta_k_original);
         }
         
-        // 1.5. Record rent lamports that will be sent to the pool when the position token
-        //      account is closed. We add them to the pool state now so that the bookkeeping
-        //      matches the real lamport transfer that the SPL-Token program will perform in
-        //      `token::close_account` below.
-        let position_acct_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-        require!(position_acct_lamports >= position_size, WhiplashError::InsufficientFunds);
-        let rent_lamports = position_acct_lamports
-            .checked_sub(position_size)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-
-        if rent_lamports > 0 {
-            let pool = &mut ctx.accounts.pool;
-            pool.lamports = pool.lamports
-                .checked_add(rent_lamports)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-        }
-        
-        // 2. Transfer tokens from vault to user
+        // 2. Transfer token payout to user (from vault)
         let pool_seeds = &[
             b"pool".as_ref(),
             pool_mint.as_ref(),
@@ -324,35 +267,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     });
     
     // Position account is automatically closed due to the close = user constraint
-    
-    // Close the position token account if it's a short position
-    // For long positions, token::transfer already emptied the account
-    // For short positions, we need to manually close the account
-    if !position.is_long {
-        // Create seeds for position PDA to act as authority
-        let nonce_bytes = position_nonce.to_le_bytes();
-        let position_seeds = &[
-            b"position".as_ref(),
-            pool_key.as_ref(),
-            user_key.as_ref(),
-            nonce_bytes.as_ref(),
-            &[bump],
-        ];
-        let position_signer = &[&position_seeds[..]];
-        
-        // Close the token account and send rent to pool
-        token::close_account(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                token::CloseAccount {
-                    account: ctx.accounts.position_token_account.to_account_info(),
-                    destination: ctx.accounts.pool.to_account_info(),
-                    authority: ctx.accounts.position.to_account_info(),
-                },
-                position_signer,
-            ),
-        )?;
-    }
+    // No position token account to close since positions are virtual
     
     Ok(())
 } 

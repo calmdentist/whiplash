@@ -55,7 +55,6 @@ describe("whiplash", () => {
   // Position state for leverage tests
   let positionPda: PublicKey;
   let positionBump: number;
-  let positionTokenAccount: PublicKey;
   let positionNonce: number;
 
   // Pool initial values
@@ -128,14 +127,6 @@ describe("whiplash", () => {
     );
     console.log("Position PDA:", positionPda.toBase58(), "with bump:", positionBump);
     console.log("Position nonce:", positionNonce);
-    
-    // Calculate the position token account address
-    positionTokenAccount = await getAssociatedTokenAddress(
-      tokenMint,
-      positionPda,
-      true // allowOwnerOffCurve
-    );
-    console.log("Position Token Account:", positionTokenAccount.toBase58());
   });
 
   after(async () => {
@@ -902,14 +893,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: wallet.publicKey,  // For SOL swap, this is just the user's wallet
-          userTokenOut: tokenAccount,     // Still need to specify this for the struct
           position: positionPda,
-          positionTokenAccount: positionTokenAccount,
-          positionTokenMint: tokenMint,   // The token that will be held in position
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
       
@@ -922,20 +908,14 @@ describe("whiplash", () => {
       const finalUserSolBalance = await provider.connection.getBalance(wallet.publicKey);
       expect(initialUserSolBalance - finalUserSolBalance).to.be.at.least(LEVERAGE_SWAP_AMOUNT);
 
-      // Verify position token account received the tokens
-      const positionTokenAccountInfo = await getAccount(provider.connection, positionTokenAccount);
-      const positionTokenBalance = Number(positionTokenAccountInfo.amount);
-      expect(positionTokenBalance).to.be.at.least(minOutputAmount);
-
       // Verify position account data
       const positionAccount = await program.account.position.fetch(positionPda);
       expect(positionAccount.authority.toString()).to.equal(wallet.publicKey.toString());
       expect(positionAccount.pool.toString()).to.equal(poolPda.toString());
-      expect(positionAccount.positionVault.toString()).to.equal(positionTokenAccount.toString());
       expect(positionAccount.isLong).to.be.true; // Should be a long position (SOL->Token)
       expect(positionAccount.collateral.toNumber()).to.equal(LEVERAGE_SWAP_AMOUNT);
       expect(positionAccount.leverage).to.equal(LEVERAGE);
-      expect(positionAccount.size.toNumber()).to.equal(positionTokenBalance);
+      expect(positionAccount.size.toNumber()).to.be.at.least(minOutputAmount); // Virtual position size
 
       // Verify pool state updated correctly
       const finalPoolAccount = await program.account.pool.fetch(poolPda);
@@ -945,8 +925,8 @@ describe("whiplash", () => {
       // Pool should have received the collateral SOL
       expect(finalPoolLamports - initialPoolLamports).to.equal(LEVERAGE_SWAP_AMOUNT);
       
-      // Pool tokens should have decreased by the amount sent to position
-      expect(initialPoolTokenAmount - finalPoolTokenAmount).to.equal(positionTokenBalance);
+      // Pool tokens should have decreased by the virtual position size (accounting)
+      expect(initialPoolTokenAmount - finalPoolTokenAmount).to.equal(positionAccount.size.toNumber());
       
       // Verify that the virtual SOL amount didn't change
       expect(finalPoolAccount.virtualSolAmount.toNumber()).to.equal(initialVirtualSolAmount);
@@ -959,12 +939,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           position: positionPda,
-          positionTokenAccount: positionTokenAccount,
           userTokenOut: wallet.publicKey, // SOL goes back to the user for a long
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
       await provider.connection.confirmTransaction(closeTx);
@@ -1012,15 +989,6 @@ describe("whiplash", () => {
         tokenMint,
         shortPositionUser.publicKey
       );
-
-      // For a short position (Token->SOL), we still need a token account for the position
-      // due to how the program is designed, even though we're swapping to SOL
-      const shortPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        shortPositionPda,
-        true // allowOwnerOffCurve
-      );
-      console.log("Short Position Token Account:", shortPositionTokenAccount.toBase58());
       
       // Create the token account for the short position user
       const createATAIx = createAssociatedTokenAccountInstruction(
@@ -1097,14 +1065,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: shortPositionUserTokenAccount,      // Token account with Y tokens
-          userTokenOut: shortPositionUser.publicKey,       // User wallet for receiving SOL
           position: shortPositionPda,
-          positionTokenAccount: shortPositionTokenAccount, // Associated token account for the position
-          positionTokenMint: tokenMint,                    // The token mint
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .signers([shortPositionUser]) // Need to use the short position user as signer
         .rpc();
@@ -1123,11 +1086,10 @@ describe("whiplash", () => {
       const positionAccount = await program.account.position.fetch(shortPositionPda);
       expect(positionAccount.authority.toString()).to.equal(shortPositionUser.publicKey.toString());
       expect(positionAccount.pool.toString()).to.equal(poolPda.toString());
-      expect(positionAccount.positionVault.toString()).to.equal(shortPositionTokenAccount.toString());
       expect(positionAccount.isLong).to.be.false; // Should be a short position (Token->SOL)
       expect(positionAccount.collateral.toNumber()).to.equal(TOKEN_SWAP_AMOUNT);
       expect(positionAccount.leverage).to.equal(LEVERAGE);
-      expect(positionAccount.size.toNumber()).to.be.at.least(minOutputAmount);
+      expect(positionAccount.size.toNumber()).to.be.at.least(minOutputAmount); // Virtual position size
 
       // Verify pool state updated correctly
       const finalPoolAccount = await program.account.pool.fetch(poolPda);
@@ -1137,31 +1099,13 @@ describe("whiplash", () => {
       // Pool tokens should have increased by the collateral
       expect(finalPoolTokenAmount - initialPoolTokenAmount).to.equal(TOKEN_SWAP_AMOUNT);
       
-      // Pool SOL should have decreased by the SOL sent to position
+      // Pool SOL should have decreased by the virtual position size (accounting)
       expect(initialPoolLamports - finalPoolLamports).to.equal(positionAccount.size.toNumber());
       
       // Verify that the virtual SOL amount didn't change
       expect(finalPoolAccount.virtualSolAmount.toNumber()).to.equal(initialVirtualSolAmount);
       
-      // For short positions, SOL is transferred to the user's wallet directly
-      const finalUserSolBalance = await provider.connection.getBalance(shortPositionUser.publicKey);
-      console.log("Position SOL amount:", positionAccount.size.toNumber());
-      console.log("Final user SOL balance:", finalUserSolBalance);
-      
-      // Upon examining the implementation in leverage_swap.rs, for short positions:
-      // 1. The code records the size in the position account
-      // 2. The SOL is transferred directly to the user's wallet, not to position_token_account
-      
-      // Verify the transaction succeeded and the position was created with correct values
-      // Instead of checking exact SOL balances (which can vary due to fees), 
-      // we trust that the position.size field correctly represents the SOL amount
-      // that should have been sent to the user
-      expect(positionAccount.size.toNumber()).to.be.at.least(minOutputAmount);
-      expect(positionAccount.isLong).to.be.false;
-      
-      // Verify the position account has the correct values
-      expect(positionAccount.collateral.toNumber()).to.equal(TOKEN_SWAP_AMOUNT);
-      expect(positionAccount.leverage).to.equal(LEVERAGE);
+      console.log("Position virtual SOL amount:", positionAccount.size.toNumber());
 
       // --- Close the short position so that K is restored ---
       const closeShortTx = await program.methods
@@ -1171,12 +1115,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           position: shortPositionPda,
-          positionTokenAccount: shortPositionTokenAccount,
           userTokenOut: shortPositionUserTokenAccount, // Tokens back to user for a short
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .signers([shortPositionUser])
         .rpc();
@@ -1214,13 +1155,6 @@ describe("whiplash", () => {
         program.programId
       );
       
-      // Calculate position token account address
-      const testPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        testPositionPda,
-        true // allowOwnerOffCurve
-      );
-      
       // Open a leveraged long position (SOL->Token)
       const openTx = await program.methods
         .leverageSwap(
@@ -1234,14 +1168,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: wallet.publicKey,
-          userTokenOut: tokenAccount,
           position: testPositionPda,
-          positionTokenAccount: testPositionTokenAccount,
-          positionTokenMint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
         
@@ -1267,12 +1196,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           position: testPositionPda,
-          positionTokenAccount: testPositionTokenAccount,
           userTokenOut: wallet.publicKey, // For a long position closing, SOL goes back to user
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
         
@@ -1342,16 +1268,10 @@ describe("whiplash", () => {
         program.programId
       );
       
-      // Create token accounts
+      // Create token account for the short test user
       const shortTestUserTokenAccount = await getAssociatedTokenAddress(
         tokenMint,
         shortTestUser.publicKey
-      );
-      
-      const shortTestPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        shortTestPositionPda,
-        true // allowOwnerOffCurve
       );
       
       // Create the token account and send tokens to it
@@ -1403,14 +1323,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: shortTestUserTokenAccount,
-          userTokenOut: shortTestUser.publicKey,
           position: shortTestPositionPda,
-          positionTokenAccount: shortTestPositionTokenAccount,
-          positionTokenMint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .signers([shortTestUser])
         .rpc();
@@ -1437,12 +1352,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           position: shortTestPositionPda,
-          positionTokenAccount: shortTestPositionTokenAccount,
           userTokenOut: shortTestUserTokenAccount, // For a short position closing, tokens go back to user's token account
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .signers([shortTestUser])
         .rpc();
@@ -1499,7 +1411,7 @@ describe("whiplash", () => {
       const stratNonce = Math.floor(Math.random() * 1000000);
       const stratNonceBytes = new BN(stratNonce).toArrayLike(Buffer, "le", 8);
 
-      // Derive PDA + token account for the position
+      // Derive PDA for the position
       const [stratPositionPda, _stratBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
@@ -1508,12 +1420,6 @@ describe("whiplash", () => {
           stratNonceBytes,
         ],
         program.programId
-      );
-
-      const stratPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        stratPositionPda,
-        true // allowOwnerOffCurve
       );
 
       const openTx = await program.methods
@@ -1528,14 +1434,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: wallet.publicKey,
-          userTokenOut: tokenAccount,
           position: stratPositionPda,
-          positionTokenAccount: stratPositionTokenAccount,
-          positionTokenMint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
       await provider.connection.confirmTransaction(openTx);
@@ -1576,12 +1477,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           position: stratPositionPda,
-          positionTokenAccount: stratPositionTokenAccount,
           userTokenOut: wallet.publicKey, // SOL back to user for long
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
       await provider.connection.confirmTransaction(closeLongTx);
@@ -1666,7 +1564,7 @@ describe("whiplash", () => {
       const stratNonce = Math.floor(Math.random() * 1000000);
       const stratNonceBytes = new BN(stratNonce).toArrayLike(Buffer, "le", 8);
 
-      // Derive PDA + token account for the position
+      // Derive PDA for the position
       const [stratPositionPda, _stratBump] = await PublicKey.findProgramAddressSync(
         [
           Buffer.from("position"),
@@ -1675,12 +1573,6 @@ describe("whiplash", () => {
           stratNonceBytes,
         ],
         program.programId
-      );
-
-      const stratPositionTokenAccount = await getAssociatedTokenAddress(
-        tokenMint,
-        stratPositionPda,
-        true // allowOwnerOffCurve
       );
 
       const openTx = await program.methods
@@ -1695,14 +1587,9 @@ describe("whiplash", () => {
           pool: poolPda,
           tokenYVault: tokenVault,
           userTokenIn: wallet.publicKey,
-          userTokenOut: tokenAccount,
           position: stratPositionPda,
-          positionTokenAccount: stratPositionTokenAccount,
-          positionTokenMint: tokenMint,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
       await provider.connection.confirmTransaction(openTx);

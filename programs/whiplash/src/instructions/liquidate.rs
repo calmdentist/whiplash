@@ -1,7 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
-    associated_token::AssociatedToken,
 };
 use crate::{state::*, events::*, WhiplashError};
 
@@ -47,20 +46,12 @@ pub struct Liquidate<'info> {
     )]
     pub position: Account<'info, Position>,
     
-    #[account(
-        mut,
-        constraint = position_token_account.key() == position.position_vault @ WhiplashError::InvalidTokenAccounts,
-    )]
-    pub position_token_account: Account<'info, TokenAccount>,
-    
     /// CHECK: This can be either an SPL token account OR a native SOL account (liquidator wallet)
     #[account(mut)]
     pub liquidator_reward_account: UncheckedAccount<'info>,
     
     pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
@@ -212,70 +203,34 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         .checked_sub(restore_amount_u64)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
     
-    // Get the position bump from context
-    let bump = *ctx.bumps.get("position").unwrap();
-    let pool_key = ctx.accounts.pool.key();
-    let position_owner_key = ctx.accounts.position_owner.key();
-    let position_nonce = position.nonce;
+    // Get pool signer seeds for transferring from vault
+    let pool_mint = ctx.accounts.pool.token_y_mint;
+    let pool_bump = ctx.accounts.pool.bump;
 
     // Handle based on position type
+    // Note: Positions are virtual - tokens were never physically transferred out of the pool
     if position.is_long {
         // LONG POSITION LIQUIDATION
+        // Position has virtual claim on Y tokens, liquidator gets Y tokens as reward
         
-        // 1. Transfer tokens from position to vault (restore amount)
-        let nonce_bytes = position_nonce.to_le_bytes();
-        let position_seeds = &[
-            b"position".as_ref(),
-            pool_key.as_ref(),
-            position_owner_key.as_ref(),
-            nonce_bytes.as_ref(),
-            &[bump],
-        ];
-        let position_signer = &[&position_seeds[..]];
-        
-        // Transfer restore amount to vault
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.position_token_account.to_account_info(),
-                    to: ctx.accounts.token_y_vault.to_account_info(),
-                    authority: ctx.accounts.position.to_account_info(),
-                },
-                position_signer,
-            ),
-            restore_amount_u64,
-        )?;
-
-        // 2. Transfer liquidator reward to liquidator
-        if liquidator_reward > 0 {
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.position_token_account.to_account_info(),
-                        to: ctx.accounts.liquidator_reward_account.to_account_info(),
-                        authority: ctx.accounts.position.to_account_info(),
-                    },
-                    position_signer,
-                ),
-                liquidator_reward,
-            )?;
-        }
-        
-        // 3. Update pool state
+        // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
+            // Return position's virtual tokens to pool (restore amount stays in pool)
             pool.token_y_amount = pool.token_y_amount
                 .checked_add(restore_amount_u64)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+            // Deduct liquidator reward from pool
+            pool.token_y_amount = pool.token_y_amount
+                .checked_sub(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             pool.leveraged_token_y_amount = pool.leveraged_token_y_amount
                 .checked_sub(position.leveraged_token_amount)
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             // Update funding fee accounting
-            // Realize the funding fees that were collected
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
                 .saturating_sub(funding_due);
             
@@ -283,67 +238,71 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             pool.total_delta_k = pool.total_delta_k
                 .saturating_sub(delta_k_original);
         }
+        
+        // 2. Transfer liquidator reward (tokens from vault to liquidator)
+        if liquidator_reward > 0 {
+            let pool_seeds = &[
+                b"pool".as_ref(),
+                pool_mint.as_ref(),
+                &[pool_bump],
+            ];
+            let pool_signer = &[&pool_seeds[..]];
+            
+            token::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.token_y_vault.to_account_info(),
+                        to: ctx.accounts.liquidator_reward_account.to_account_info(),
+                        authority: ctx.accounts.pool.to_account_info(),
+                    },
+                    pool_signer,
+                ),
+                liquidator_reward,
+            )?;
+        }
     } else {
         // SHORT POSITION LIQUIDATION
+        // Position has virtual claim on SOL, liquidator gets SOL as reward
         
-        // For short positions, the position holds SOL. We need to:
-        // 1. Send restore amount to pool
-        // 2. Send reward to liquidator
-        // 3. Update pool accounting
-
-        let position_account_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-        
-        // Ensure position has enough lamports
-        require!(
-            position_account_lamports >= position_size,
-            WhiplashError::InsufficientFunds
-        );
-
-        // Transfer restore amount to pool
-        let pool_starting_lamports = ctx.accounts.pool.to_account_info().lamports();
-        let position_starting_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-        
-        **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = pool_starting_lamports
-            .checked_add(restore_amount_u64)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
-            
-        **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = position_starting_lamports
-            .checked_sub(restore_amount_u64)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
-
-        // Transfer liquidator reward to liquidator if any
-        if liquidator_reward > 0 {
-            let liquidator_starting_lamports = ctx.accounts.liquidator_reward_account.to_account_info().lamports();
-            let position_current_lamports = ctx.accounts.position_token_account.to_account_info().lamports();
-            
-            **ctx.accounts.liquidator_reward_account.to_account_info().try_borrow_mut_lamports()? = liquidator_starting_lamports
-                .checked_add(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-                
-            **ctx.accounts.position_token_account.to_account_info().try_borrow_mut_lamports()? = position_current_lamports
-                .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
-        }
-        
-        // Update pool state
+        // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
+            // Return position's virtual SOL to pool (restore amount stays in pool)
             pool.lamports = pool.lamports
                 .checked_add(restore_amount_u64)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
+            
+            // Deduct liquidator reward from pool
+            pool.lamports = pool.lamports
+                .checked_sub(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             pool.leveraged_sol_amount = pool.leveraged_sol_amount
                 .checked_sub(position.leveraged_token_amount)
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             // Update funding fee accounting
-            // Realize the funding fees that were collected
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
                 .saturating_sub(funding_due);
             
             // Remove this position's delta_k from the total
             pool.total_delta_k = pool.total_delta_k
                 .saturating_sub(delta_k_original);
+        }
+        
+        // 2. Transfer liquidator reward (SOL from pool to liquidator)
+        if liquidator_reward > 0 {
+            let pool_lamports = ctx.accounts.pool.to_account_info().lamports();
+            let liquidator_lamports = ctx.accounts.liquidator_reward_account.to_account_info().lamports();
+            
+            **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = pool_lamports
+                .checked_sub(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                
+            **ctx.accounts.liquidator_reward_account.to_account_info().try_borrow_mut_lamports()? = liquidator_lamports
+                .checked_add(liquidator_reward)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
         }
     }
 
