@@ -55,6 +55,125 @@ pub struct Pool {
 
 impl Pool {
     pub const LEN: usize = 8 + Pool::INIT_SPACE;
+    
+    // Update the funding rate accumulators based on time elapsed
+    pub fn update_funding_accumulators(&mut self, current_timestamp: i64) -> Result<()> {
+        if self.total_delta_k == 0 || self.original_k == 0 {
+            // No positions open, just update timestamp
+            self.last_funding_timestamp = current_timestamp;
+            return Ok(());
+        }
+        
+        let time_elapsed = current_timestamp
+            .checked_sub(self.last_funding_timestamp)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))? as u128;
+        
+        if time_elapsed == 0 {
+            return Ok(());
+        }
+        
+        // Calculate funding rate: C * (r / (1 - r))^2
+        // Since r = total_delta_k / original_k, we can simplify:
+        // r / (1 - r) = total_delta_k / (original_k - total_delta_k)
+        
+        // Ensure total_delta_k < original_k (otherwise the system is over-leveraged)
+        require!(
+            self.total_delta_k < self.original_k,
+            crate::WhiplashError::ExcessiveLeverage
+        );
+        
+        let k_minus_delta_k = self.original_k
+            .checked_sub(self.total_delta_k)
+            .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
+        
+        // Use fixed-point precision for accurate calculation
+        // Using 32 bits to avoid overflow when multiplying with large delta_k values
+        const PRECISION_BITS: u32 = 32;
+        const PRECISION: u128 = 1u128 << PRECISION_BITS;
+        
+        // ratio = (total_delta_k << PRECISION_BITS) / (original_k - total_delta_k)
+        let ratio = self.total_delta_k
+            .checked_mul(PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(k_minus_delta_k)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // ratio_squared = (ratio * ratio) >> PRECISION_BITS
+        let ratio_squared = ratio
+            .checked_mul(ratio)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Calculate funding rate: C * ratio_squared
+        // We'll use C = 0.0001 per second (represented in fixed-point)
+        let c_numerator: u128 = PRECISION / 10000; // 0.0001 in fixed-point
+        
+        // funding_rate = C * ratio_squared / PRECISION
+        let funding_rate = c_numerator
+            .checked_mul(ratio_squared)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Get current y reserve for dimensional correctness
+        let total_y: u128 = self.token_y_amount
+            .checked_add(self.virtual_token_y_amount)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))? as u128;
+        
+        require!(total_y > 0, crate::WhiplashError::InsufficientLiquidity);
+        
+        // Update cumulative funding rate index
+        // I(t) has dimensions 1/[y], so delta_index = (funding_rate * time_elapsed) / y_current
+        let delta_index = funding_rate
+            .checked_mul(time_elapsed)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(total_y)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        self.cumulative_funding_rate_index = self.cumulative_funding_rate_index
+            .checked_add(delta_index)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Update unrealized funding fees (in base asset [x])
+        // delta_fees = (funding_rate * total_delta_k * time_elapsed) / (y_current * PRECISION)
+        let delta_fees = funding_rate
+            .checked_mul(self.total_delta_k)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_mul(time_elapsed)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(total_y)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        self.unrealized_funding_fees = self.unrealized_funding_fees
+            .checked_add(delta_fees)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        self.last_funding_timestamp = current_timestamp;
+        
+        Ok(())
+    }
+    
+    // Calculate funding fees for a position
+    pub fn calculate_position_funding_fee(
+        &self,
+        entry_funding_rate_index: u128,
+        position_delta_k: u128,
+    ) -> Result<u128> {
+        // funding_due = (current_index - entry_index) * delta_k
+        let index_diff = self.cumulative_funding_rate_index
+            .checked_sub(entry_funding_rate_index)
+            .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
+        
+        let funding_due = index_diff
+            .checked_mul(position_delta_k)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        Ok(funding_due)
+    }
+    
     // Calculates the amount of token Y to receive when swapping SOL
     pub fn calculate_swap_x_to_y(&self, amount_in: u64) -> Result<u64> {
         if amount_in == 0 {

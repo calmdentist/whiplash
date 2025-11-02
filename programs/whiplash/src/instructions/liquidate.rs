@@ -64,14 +64,25 @@ pub struct Liquidate<'info> {
 }
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
+    // Update funding rate accumulators before any position operations
+    let current_timestamp = Clock::get()?.unix_timestamp;
+    ctx.accounts.pool.update_funding_accumulators(current_timestamp)?;
+    
     let position = &ctx.accounts.position;
     let pool = &ctx.accounts.pool;
     
     // -----------------------------------------------------------------
-    // Calculate expected payout and check liquidation condition
+    // Calculate funding fees and effective delta_k
     // -----------------------------------------------------------------
 
     let position_size = position.size;
+    let delta_k_original: u128 = position.delta_k;
+    
+    // Calculate funding fees owed by this position
+    let funding_due = pool.calculate_position_funding_fee(
+        position.entry_funding_rate_index,
+        delta_k_original,
+    )?;
 
     // Current total reserves (real + virtual)
     let total_x: u128 = pool.lamports
@@ -80,9 +91,17 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let total_y: u128 = pool.token_y_amount
         .checked_add(pool.virtual_token_y_amount)
         .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    
+    // Calculate delta_k repaid through funding fees
+    // delta_k_repaid = funding_due * y_current
+    let delta_k_repaid = funding_due
+        .checked_mul(total_y)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+    
+    // Calculate effective delta_k after accounting for funding fees
+    let delta_k: u128 = delta_k_original.saturating_sub(delta_k_repaid);
 
     let position_size_u128: u128 = position_size as u128;
-    let delta_k: u128 = position.delta_k;
 
     // Calculate expected payout and liquidation threshold
     let (expected_payout, liquidation_threshold) = if position.is_long {
@@ -254,6 +273,15 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             pool.leveraged_token_y_amount = pool.leveraged_token_y_amount
                 .checked_sub(position.leveraged_token_amount)
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
+            
+            // Update funding fee accounting
+            // Realize the funding fees that were collected
+            pool.unrealized_funding_fees = pool.unrealized_funding_fees
+                .saturating_sub(funding_due);
+            
+            // Remove this position's delta_k from the total
+            pool.total_delta_k = pool.total_delta_k
+                .saturating_sub(delta_k_original);
         }
     } else {
         // SHORT POSITION LIQUIDATION
@@ -307,6 +335,15 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             pool.leveraged_sol_amount = pool.leveraged_sol_amount
                 .checked_sub(position.leveraged_token_amount)
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
+            
+            // Update funding fee accounting
+            // Realize the funding fees that were collected
+            pool.unrealized_funding_fees = pool.unrealized_funding_fees
+                .saturating_sub(funding_due);
+            
+            // Remove this position's delta_k from the total
+            pool.total_delta_k = pool.total_delta_k
+                .saturating_sub(delta_k_original);
         }
     }
 

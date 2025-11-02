@@ -74,6 +74,10 @@ pub fn handle_leverage_swap(
     leverage: u32,
     nonce: u64,
 ) -> Result<()> {
+    // Update funding rate accumulators before any position operations
+    let current_timestamp = Clock::get()?.unix_timestamp;
+    ctx.accounts.pool.update_funding_accumulators(current_timestamp)?;
+    
     // Validate input amount
     if amount_in == 0 {
         return Err(error!(WhiplashError::ZeroSwapAmount));
@@ -190,16 +194,16 @@ pub fn handle_leverage_swap(
         .checked_sub(k_after)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
     
-    // Validate delta_k is at most 10% of current k
-    let max_delta_k = k_before
-        .checked_mul(10)
-        .ok_or(error!(WhiplashError::MathOverflow))?
-        .checked_div(100)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    require!(
-        delta_k <= max_delta_k,
-        WhiplashError::DeltaKOverload
-    );
+    // // Validate delta_k is at most 10% of current k
+    // let max_delta_k = k_before
+    //     .checked_mul(10)
+    //     .ok_or(error!(WhiplashError::MathOverflow))?
+    //     .checked_div(100)
+    //     .ok_or(error!(WhiplashError::MathOverflow))?;
+    // require!(
+    //     delta_k <= max_delta_k,
+    //     WhiplashError::DeltaKOverload
+    // );
     
     // Check minimum output amount
     require!(
@@ -286,6 +290,9 @@ pub fn handle_leverage_swap(
     position.leveraged_token_amount = leveraged_amount_out;
     position.nonce = nonce;
     
+    // Store the current cumulative funding rate index for this position
+    position.entry_funding_rate_index = ctx.accounts.pool.cumulative_funding_rate_index;
+    
     // Calculate entry price (simple estimation as average price) as Q64.64 u128
     let entry_price = ((amount_in as u128 * leverage as u128) << 64) / ((amount_out as u128) << 64);
     position.entry_price = entry_price;
@@ -313,6 +320,11 @@ pub fn handle_leverage_swap(
             pool.virtual_sol_amount -= repay;
         }
     }
+    
+    // Update total_delta_k for the pool
+    pool.total_delta_k = pool.total_delta_k
+        .checked_add(delta_k)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
     // msg!("pool.leveraged_token_y_amount: {}", pool.leveraged_token_y_amount);
     
     // Emit swap event

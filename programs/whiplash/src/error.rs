@@ -61,4 +61,7 @@ pub enum WhiplashError {
 
     #[msg("Position cannot be closed (would require liquidation)")]
     PositionNotClosable,
+
+    #[msg("Excessive leverage - total delta_k ratio too high")]
+    ExcessiveLeverage,
 } 

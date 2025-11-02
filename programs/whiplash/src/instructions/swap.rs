@@ -38,6 +38,11 @@ pub struct Swap<'info> {
 }
 
 pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
+    // Update funding rate accumulators to ensure they're current
+    // This ensures spot traders benefit from accrued funding fees
+    let current_timestamp = Clock::get()?.unix_timestamp;
+    ctx.accounts.pool.update_funding_accumulators(current_timestamp)?;
+    
     // Validate input amount
     if amount_in == 0 {
         return Err(error!(WhiplashError::ZeroSwapAmount));

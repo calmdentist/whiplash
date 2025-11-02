@@ -191,6 +191,21 @@ pub fn handle_launch(
     // Initialize virtual token Y reserves
     pool.virtual_token_y_amount = 0;
     
+    // Initialize funding rate fields
+    let total_x = virtual_sol_reserve as u128;
+    let total_y = total_supply as u128;
+    pool.original_k = total_x
+        .checked_mul(total_y)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+    pool.total_delta_k = 0;
+    pool.last_funding_timestamp = Clock::get()?.unix_timestamp;
+    pool.cumulative_funding_rate_index = 0;
+    pool.unrealized_funding_fees = 0;
+    
+    // Initialize leveraged amounts to 0
+    pool.leveraged_token_y_amount = 0;
+    pool.leveraged_sol_amount = 0;
+    
     // Emit the pool launched event
     emit!(PoolLaunched {
         token_mint: ctx.accounts.token_mint.key(),
