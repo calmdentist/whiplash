@@ -1524,6 +1524,174 @@ describe("whiplash", () => {
     }
   });
 
+  it("Validates funding rate mechanism charges leverage positions over time", async () => {
+    try {
+      // Get initial pool state
+      const initialPoolAccount = await program.account.pool.fetch(poolPda);
+      const initialK = constantProduct(initialPoolAccount);
+      const initialUnrealizedFees = initialPoolAccount.unrealizedFundingFees.toString();
+      const initialCumulativeIndex = initialPoolAccount.cumulativeFundingRateIndex.toString();
+      const initialTotalDeltaK = initialPoolAccount.totalDeltaK.toString();
+      
+      console.log("\n--- Initial State ---");
+      console.log("Initial K:", initialK.toString());
+      console.log("Initial unrealized funding fees:", initialUnrealizedFees);
+      console.log("Initial cumulative funding rate index:", initialCumulativeIndex);
+      console.log("Initial total delta_k:", initialTotalDeltaK);
+      
+      // Generate nonce for test position
+      const fundingTestNonce = Math.floor(Math.random() * 1000000);
+      const fundingTestNonceBytes = new BN(fundingTestNonce).toArrayLike(Buffer, "le", 8);
+      
+      // Derive position PDA
+      const [fundingTestPositionPda] = await PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("position"),
+          poolPda.toBuffer(),
+          wallet.publicKey.toBuffer(),
+          fundingTestNonceBytes,
+        ],
+        program.programId
+      );
+      
+      // Open a leveraged long position
+      console.log("\n--- Opening Leveraged Position ---");
+      const openTx = await program.methods
+        .leverageSwap(
+          new BN(LEVERAGE_SWAP_AMOUNT),
+          new BN(0),
+          LEVERAGE,
+          new BN(fundingTestNonce)
+        )
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          userTokenIn: wallet.publicKey,
+          position: fundingTestPositionPda,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(openTx);
+      
+      // Get position state
+      const positionAccount = await program.account.position.fetch(fundingTestPositionPda);
+      console.log("Position opened with:");
+      console.log("  - Size:", positionAccount.size.toString());
+      console.log("  - Delta K:", positionAccount.deltaK.toString());
+      console.log("  - Entry funding index:", positionAccount.entryFundingRateIndex.toString());
+      
+      // Get pool state after opening
+      const poolAfterOpen = await program.account.pool.fetch(poolPda);
+      console.log("  - Pool total_delta_k:", poolAfterOpen.totalDeltaK.toString());
+      console.log("  - Pool original_k:", poolAfterOpen.originalK.toString());
+      
+      // Perform multiple swaps over time to allow funding to accumulate
+      // Each swap triggers update_funding_accumulators with elapsed time
+      console.log("\n--- Simulating Time Passage with Swaps ---");
+      
+      for (let i = 0; i < 5; i++) {
+        // Small delay between swaps (test validator timestamps advance)
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        const smallSwapTx = await program.methods
+          .swap(
+            new BN(1 * LAMPORTS_PER_SOL),
+            new BN(0)
+          )
+          .accounts({
+            user: wallet.publicKey,
+            pool: poolPda,
+            tokenYVault: tokenVault,
+            userTokenIn: wallet.publicKey,
+            userTokenOut: tokenAccount,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        await provider.connection.confirmTransaction(smallSwapTx);
+        
+        // Check pool state
+        const poolState = await program.account.pool.fetch(poolPda);
+        console.log(`  - Swap ${i + 1}: unrealized_fees = ${poolState.unrealizedFundingFees.toString()}, cumulative_index = ${poolState.cumulativeFundingRateIndex.toString()}`);
+      }
+      
+      // Check funding accumulators after swaps
+      const poolBeforeClose = await program.account.pool.fetch(poolPda);
+      const unrealizedFeesAfterTime = poolBeforeClose.unrealizedFundingFees.toString();
+      const cumulativeIndexAfterTime = poolBeforeClose.cumulativeFundingRateIndex.toString();
+      
+      console.log("\n--- After Swaps (Time Elapsed) ---");
+      console.log("Unrealized funding fees:", unrealizedFeesAfterTime);
+      console.log("Cumulative funding rate index:", cumulativeIndexAfterTime);
+      console.log("Fees increased:", BigInt(unrealizedFeesAfterTime) > BigInt(initialUnrealizedFees));
+      
+      // Verify unrealized fees have increased (shows funding is accruing)
+      const initialFeesNum = Number(BigInt(initialUnrealizedFees));
+      const finalFeesNum = Number(BigInt(unrealizedFeesAfterTime));
+      expect(finalFeesNum).to.be.greaterThan(initialFeesNum);
+      
+      // Note: cumulative_index may stay at 0 in tests due to precision
+      // (small time elapsed / huge y_current rounds to 0)
+      // But unrealized_fees proves the mechanism is working
+      
+      // Close the position
+      console.log("\n--- Closing Position ---");
+      const userSolBefore = await provider.connection.getBalance(wallet.publicKey);
+      
+      const closeTx = await program.methods
+        .closePosition()
+        .accounts({
+          user: wallet.publicKey,
+          pool: poolPda,
+          tokenYVault: tokenVault,
+          position: fundingTestPositionPda,
+          userTokenOut: wallet.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      await provider.connection.confirmTransaction(closeTx);
+      
+      const userSolAfter = await provider.connection.getBalance(wallet.publicKey);
+      const poolAfterClose = await program.account.pool.fetch(poolPda);
+      
+      // Calculate actual SOL received
+      const solReceived = userSolAfter - userSolBefore;
+      const solProfit = solReceived - LEVERAGE_SWAP_AMOUNT;
+      console.log("User received SOL (including gas):", solReceived / LAMPORTS_PER_SOL, "SOL");
+      console.log("Position collateral was:", LEVERAGE_SWAP_AMOUNT / LAMPORTS_PER_SOL, "SOL");
+      console.log("Net profit/loss (excluding gas):", solProfit / LAMPORTS_PER_SOL, "SOL");
+      
+      // Note: User may profit or lose based on price movement from the swaps
+      // The key validation is that unrealized_fees increased, proving funding is working
+      // Even if position profits exceed funding fees, the fees were still charged
+      
+      // Verify pool state is restored
+      const finalK = constantProduct(poolAfterClose);
+      const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
+      const kDiffPercentage = kDiff / scaled(initialK);
+      
+      console.log("\n--- Final State ---");
+      console.log("Final K:", finalK.toString());
+      console.log("K difference percentage:", kDiffPercentage * 100, "%");
+      console.log("Total delta_k (should be 0):", poolAfterClose.totalDeltaK.toString());
+      console.log("Unrealized fees (should be ~0):", poolAfterClose.unrealizedFundingFees.toString());
+      
+      // K should be restored (with small tolerance)
+      expect(kDiffPercentage).to.be.lessThan(0.001); // 0.1% tolerance
+      
+      // Total delta_k should be back to initial value
+      expect(poolAfterClose.totalDeltaK.toString()).to.equal(initialTotalDeltaK);
+      
+      console.log("\n✅ Funding rate mechanism validated successfully!");
+    } catch (error) {
+      console.error("Funding rate test error:", error);
+      throw error;
+    }
+  });
+
   it("Spot buys, opens leveraged long, then sells all spot tokens without error", async () => {
     try {
       // Record initial pool K value
