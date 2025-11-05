@@ -83,21 +83,17 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     }
     
     // --------------------------------------------------
-    // Calculate output & soft-boundary premium (Y → X)
+    // Calculate output using effective liquidity
     // --------------------------------------------------
-    let (amount_out, premium) = if is_sol_to_y {
-        // X → Y path – no soft boundary / premium logic needed.
-        (ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?, 0u64)
+    let amount_out = if is_sol_to_y {
+        // X → Y path
+        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
     } else {
-        // Y → X path – compute with and without soft boundary.
-        let amount_out_soft = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, true)?;
-        let amount_out_plain = ctx.accounts.pool.calculate_swap_y_to_x(amount_in, false)?;
-        // Plain quote ignores leveraged debt, so it should be >= soft quote.
-        let prem = amount_out_plain.saturating_sub(amount_out_soft); //saturating_sub may not be necessary, just in case for rounding errors.
-        (amount_out_soft, prem)
+        // Y → X path
+        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
     };
     
-    // Check minimum output amount against the user-facing value (with soft boundary).
+    // Check minimum output amount
     require!(amount_out >= min_amount_out, WhiplashError::SlippageToleranceExceeded);
     
     // Handle token transfers
@@ -177,13 +173,6 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             .ok_or(error!(WhiplashError::MathOverflow))?;
         pool.lamports = pool.lamports.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
-
-        // Use the premium to retire virtual SOL reserve.
-        if premium > 0 && pool.virtual_sol_amount > 0 {
-            let repay = premium.min(pool.virtual_sol_amount);
-            pool.virtual_sol_amount -= repay;
-            // No lamport change needed – the premium already stayed in `pool.lamports`.
-        }
     }
     
     // Emit swap event

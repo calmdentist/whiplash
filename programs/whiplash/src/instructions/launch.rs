@@ -11,7 +11,7 @@ use mpl_token_metadata::{
 use crate::{state::*, events::*, WhiplashError};
 
 #[derive(Accounts)]
-#[instruction(virtual_sol_reserve: u64, token_name: String, token_ticker: String, metadata_uri: String)]
+#[instruction(sol_amount: u64, token_name: String, token_ticker: String, metadata_uri: String)]
 pub struct Launch<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -69,12 +69,30 @@ pub struct Launch<'info> {
 
 pub fn handle_launch(
     ctx: Context<Launch>, 
-    virtual_sol_reserve: u64,
+    sol_amount: u64,
     token_name: String,
     token_ticker: String,
     metadata_uri: String,
 ) -> Result<()> {
-    // Initialize pool state first
+    // Validate SOL amount
+    require!(sol_amount > 0, WhiplashError::ZeroSwapAmount);
+    
+    // Transfer SOL from authority to pool
+    let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+        &ctx.accounts.authority.key(),
+        &ctx.accounts.pool.key(),
+        sol_amount,
+    );
+    anchor_lang::solana_program::program::invoke(
+        &transfer_ix,
+        &[
+            ctx.accounts.authority.to_account_info(),
+            ctx.accounts.pool.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
+        ],
+    )?;
+    
+    // Initialize pool state
     let pool = &mut ctx.accounts.pool;
     pool.authority = ctx.accounts.authority.key();
     pool.token_y_mint = ctx.accounts.token_mint.key();
@@ -185,14 +203,11 @@ pub fn handle_launch(
     
     // Update pool state with proper overflow checks
     pool.token_y_amount = total_supply;
-    pool.virtual_sol_amount = virtual_sol_reserve;
-    // Initialize real SOL reserves to 0
-    pool.lamports = 0;
-    // Initialize virtual token Y reserves
-    pool.virtual_token_y_amount = 0;
+    // Set real SOL reserves to the transferred amount
+    pool.lamports = sol_amount;
     
     // Initialize funding rate fields
-    let total_x = virtual_sol_reserve as u128;
+    let total_x = sol_amount as u128;
     let total_y = total_supply as u128;
     pool.original_k = total_x
         .checked_mul(total_y)
@@ -210,7 +225,7 @@ pub fn handle_launch(
     emit!(PoolLaunched {
         token_mint: ctx.accounts.token_mint.key(),
         pool: ctx.accounts.pool.key(),
-        virtual_sol_reserve,
+        virtual_sol_reserve: sol_amount,
         timestamp: Clock::get()?.unix_timestamp,
     });
     

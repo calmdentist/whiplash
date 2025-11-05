@@ -18,21 +18,15 @@ pub struct Position {
     // The leverage multiplier
     pub leverage: u32,
 
-    // The entry price of the position
-    pub entry_price: u128,
-
     // The position size (virtual token amount owned by this position)
     pub size: u64,
 
     // The stored delta_k value needed to restore the pool invariant
     pub delta_k: u128,
 
-    // A snapshot of the cumulative_funding_rate_index from the Pool when this position was opened
-    pub entry_funding_rate_index: u128,
-
-    // The leveraged token amount (output amount - collateral output amount)
-    pub leveraged_token_amount: u64,
-
+    // A snapshot of the cumulative_funding_accumulator from the Pool when this position was opened
+    pub entry_funding_accumulator: u128,
+    
     // The position nonce (allows for multiple positions in same pool)
     pub nonce: u64,
 

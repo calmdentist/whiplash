@@ -63,36 +63,50 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let pool = &ctx.accounts.pool;
     
     // -----------------------------------------------------------------
-    // Calculate funding fees and effective delta_k
+    // Calculate effective position values using amortization formula
+    // f(t) = 1 - (I(t) - I(t_open))
+    // y_effective = y_original * f(t)
+    // delta_k_effective = delta_k_original * f(t)
     // -----------------------------------------------------------------
 
-    let position_size = position.size;
+    let position_size_original = position.size;
     let delta_k_original: u128 = position.delta_k;
     
-    // Calculate funding fees owed by this position
-    let funding_due = pool.calculate_position_funding_fee(
-        position.entry_funding_rate_index,
-        delta_k_original,
-    )?;
-
-    // Current total reserves (real + virtual)
-    let total_x: u128 = pool.lamports
-        .checked_add(pool.virtual_sol_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
-    let total_y: u128 = pool.token_y_amount
-        .checked_add(pool.virtual_token_y_amount)
-        .ok_or(error!(WhiplashError::MathOverflow))? as u128;
+    // Calculate the index difference (funding accrued)
+    const INDEX_PRECISION_BITS: u32 = 64;
+    const INDEX_PRECISION: u128 = 1u128 << INDEX_PRECISION_BITS;
     
-    // Calculate delta_k repaid through funding fees
-    // delta_k_repaid = funding_due * y_current
-    let delta_k_repaid = funding_due
-        .checked_mul(total_y)
+    let index_diff = pool.cumulative_funding_rate_index
+        .checked_sub(position.entry_funding_rate_index)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
+    
+    // Calculate effective position size: y_effective = y_original * (1 - index_diff / PRECISION)
+    // Rearranged to: y_effective = y_original - (y_original * index_diff / PRECISION)
+    let position_size_reduction = (position_size_original as u128)
+        .checked_mul(index_diff)
+        .ok_or(error!(WhiplashError::MathOverflow))?
+        .checked_div(INDEX_PRECISION)
         .ok_or(error!(WhiplashError::MathOverflow))?;
     
-    // Calculate effective delta_k after accounting for funding fees
-    let delta_k: u128 = delta_k_original.saturating_sub(delta_k_repaid);
+    let position_size_u128: u128 = (position_size_original as u128)
+        .checked_sub(position_size_reduction)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
+    
+    // Calculate effective delta_k: delta_k_effective = delta_k_original * (1 - index_diff / PRECISION)
+    // Rearranged to: delta_k_effective = delta_k_original - (delta_k_original * index_diff / PRECISION)
+    let delta_k_reduction = delta_k_original
+        .checked_mul(index_diff)
+        .ok_or(error!(WhiplashError::MathOverflow))?
+        .checked_div(INDEX_PRECISION)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
+    
+    let delta_k: u128 = delta_k_original
+        .checked_sub(delta_k_reduction)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
 
-    let position_size_u128: u128 = position_size as u128;
+    // Current total reserves
+    let total_x: u128 = pool.lamports as u128;
+    let total_y: u128 = pool.token_y_amount as u128;
 
     // Calculate expected payout and liquidation threshold
     let (expected_payout, liquidation_threshold) = if position.is_long {
@@ -170,6 +184,18 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     // Execute liquidation
     // -----------------------------------------------------------------
 
+    // Convert effective position size to u64 for liquidation calculations
+    let effective_position_size_u64 = if position_size_u128 > u64::MAX as u128 {
+        return Err(error!(WhiplashError::MathOverflow));
+    } else {
+        position_size_u128 as u64
+    };
+    
+    // Calculate how much of the position was paid through funding fees
+    let funding_fees_paid = delta_k_original
+        .checked_sub(delta_k)
+        .ok_or(error!(WhiplashError::MathUnderflow))?;
+
     // Calculate exact amount needed to restore invariant using ceiling division
     // to ensure we restore enough tokens to fully restore the invariant
     let restore_amount = if position.is_long {
@@ -198,8 +224,8 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     }
     let restore_amount_u64 = restore_amount as u64;
 
-    // Calculate liquidator reward
-    let liquidator_reward = position_size
+    // Calculate liquidator reward using effective position size
+    let liquidator_reward = effective_position_size_u64
         .checked_sub(restore_amount_u64)
         .ok_or(error!(WhiplashError::MathUnderflow))?;
     
@@ -231,10 +257,11 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             // Update funding fee accounting
+            // Convert unrealized fees to realized based on what was actually paid
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
-                .saturating_sub(funding_due);
+                .saturating_sub(funding_fees_paid);
             
-            // Remove this position's delta_k from the total
+            // Remove this position's original delta_k from the total
             pool.total_delta_k = pool.total_delta_k
                 .saturating_sub(delta_k_original);
         }
@@ -283,10 +310,11 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
                 .ok_or(error!(WhiplashError::MathUnderflow))?;
             
             // Update funding fee accounting
+            // Convert unrealized fees to realized based on what was actually paid
             pool.unrealized_funding_fees = pool.unrealized_funding_fees
-                .saturating_sub(funding_due);
+                .saturating_sub(funding_fees_paid);
             
-            // Remove this position's delta_k from the total
+            // Remove this position's original delta_k from the total
             pool.total_delta_k = pool.total_delta_k
                 .saturating_sub(delta_k_original);
         }
@@ -312,7 +340,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         position_owner: ctx.accounts.position_owner.key(),
         pool: ctx.accounts.pool.key(),
         position: ctx.accounts.position.key(),
-        position_size,
+        position_size: position_size_original,
         borrowed_amount: position.leveraged_token_amount,
         expected_output: expected_payout as u64,
         liquidator_reward,

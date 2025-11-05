@@ -55,33 +55,28 @@ Whiplash unifies spot and leverage trading within a single liquidity pool - prov
 
 \section{Mathematical Foundation}
 
-At its core, Whiplash uses a constant product invariant similar to Uniswap V2. However, to support unified spot and leverage trading, the protocol introduces the following concepts: \textbf{borrowed liquidity} (represented by $\Delta k$) and the \textbf{LP funding rate}. 
+At its core, Whiplash uses a constant product invariant. However, to support a unified market for spot and leverage trading, it introduces the critical concepts of \textbf{real reserves} and \textbf{effective reserves}.
 
-\\\\When leverage traders open positions, they effectively borrow liquidity from the pool, which temporarily reduces the liquidity depth. This borrowed liquidity is repaid continuously through the LP funding rate and settled when positions close.
+\begin{itemize}
+    \item \textbf{Real Reserves ($x_r, y_r$)}: The actual amount of SOL and tokens held in the protocol's vaults. These are only ever changed by spot traders depositing or withdrawing assets.
+    \item \textbf{Effective Reserves ($x_e, y_e$)}: The virtual reserves that all trades are priced against. For spot trades, $x_e$ and $y_e$ are changed in lockstep with $x_r$ and $y_r$. For leverage trades, only the effective reserves are modified, reflecting the virtual nature of the positions.
+\end{itemize}
 
-\\\\The LP funding rate increases quadratically as the pool becomes increasingly leveraged, incentivizing a healthy equilibrium.
+Leverage is made possible by allowing the effective reserves to deviate from the real reserves. The difference represents the total outstanding debt owed to the pool by leverage traders. This debt is denominated in an abstract, price-agnostic unit of liquidity called \textbf{delta k ($\Delta k$)}.
 
 \subsection{Core Variables}
 
 The protocol tracks the following state variables:
 \begin{itemize}
-    \item $x$: The total reserve of the base asset (real + virtual).
-    \item $y$: The total reserve of the token (real + virtual).
-    \item $x_l$: The leveraged base asset amount allocated to short positions.
-    \item $y_l$: The leveraged token amount allocated to long positions.
-    \item $k_{\text{original}}$: The original constant product at pool launch.
-    \item $\Delta k_i$: The borrowed liquidity for position $i$ (stored with each position).
-    \item $\sum \Delta k_i$: The total borrowed liquidity across all open positions.
+    \item $x_r, y_r$: The real reserves of the base asset and token.
+    \item $x_e, y_e$: The live, effective reserves of the base asset and token.
+    \item $\sum \Delta k_{\text{longs}}$: The sum of original $\Delta k$ from all open long positions.
+    \item $\sum \Delta k_{\text{shorts}}$: The sum of original $\Delta k$ from all open short positions.
+    \item $I(t)$: A cumulative funding index used to calculate the state of individual positions.
 \end{itemize}
-
-The fundamental constant product invariant is:
+The fundamental relationship for any swap is against the effective reserves:
 \begin{equation}
-x \cdot y = k
-\end{equation}
-
-When positions are open, the effective constant product is reduced by the total borrowed liquidity:
-\begin{equation}
-k_{\text{effective}} = k_{\text{current}} - \sum \Delta k_i
+x_e \cdot y_e = k_e
 \end{equation}
 
 \section{Leverage Trading Mechanism}
@@ -89,19 +84,25 @@ k_{\text{effective}} = k_{\text{current}} - \sum \Delta k_i
 Similarly to traditional derivative contracts, leveraged positions on Whiplash are virtual claims on pool value rather than physical token ownership.
 
 \subsection{Opening a Leveraged Position}
+A leveraged position is created by swapping a notional amount (collateral $\times$ leverage) against the AMM's effective liquidity. The collateral is always denominated in the input asset of the swap, and the position's virtual size is denominated in the output asset.
 
-When a trader opens a leveraged position with collateral $c$ and leverage multiplier $L$, the position size is calculated as though the trader swapped the notional amount ($c$ x $L$) against the constant product AMM:
-
+\subsubsection{Long Position (Base Asset as Collateral)}
+To open a long position on the token, a trader provides collateral $c_x$ in the base asset. The notional value ($c_x \times L$) is swapped virtually to determine the position size, $\Delta y$:
 \begin{equation}
-\Delta y = \frac{y_{\text{pre}} \cdot c \cdot L}{x_{\text{pre}} + c \cdot L}
+\Delta y = \frac{y_{\text{pre}} \cdot (c_x \cdot L)}{x_{\text{pre}} + (c_x \cdot L)}
 \end{equation}
+This $\Delta y$ becomes the position's virtual size, denominated in the token asset.
 
-This $\Delta y$ becomes the position's virtual size, $y_{\text{position}}$. Critically, these tokens are not physically transferred out of the pool - they remain in the vault. The position is a pure accounting entry representing a claim on pool value.
-
-\\\\The borrowed liquidity, $\Delta k$, is calculated as the reduction in the constant product caused by opening the position:
-
+\subsubsection{Short Position (Token as Collateral)}
+To open a short position on the token, a trader provides collateral $c_y$ in the token asset - note that shorting with sol as collateral is equivalent to an atomic spot buy + leverage sell. The notional value ($c_y \times L$) is swapped virtually to determine the position size, $\Delta x$:
 \begin{equation}
-\Delta k = k_{\text{pre}} - k_{\text{post}} = (x_{\text{pre}} \cdot y_{\text{pre}}) - ((x_{\text{pre}} + c) \cdot (y_{\text{pre}} - \Delta y))
+\Delta x = \frac{x_{\text{pre}} \cdot (c_y \cdot L)}{y_{\text{pre}} + (c_y \cdot L)}
+\end{equation}
+This $\Delta x$ becomes the position's virtual size, denominated in the base asset.
+
+In both cases, the output amount is not physically transferred; it is an accounting entry representing a claim on pool value. The borrowed liquidity, $\Delta k$, is calculated as the reduction in the constant product caused by the virtual swap. Let $x_{\text{post}}$ and $y_{\text{post}}$ be the virtual reserves after the notional swap:
+\begin{equation}
+\Delta k = k_{\text{pre}} - k_{\text{post}} = (x_{\text{pre}} \cdot y_{\text{pre}}) - (x_{\text{post}} \cdot y_{\text{post}})
 \end{equation}
 
 This $\Delta k$ value is stored with the position and represents the liquidity borrowed from the pool. The trader must repay this borrowed liquidity through:
@@ -111,57 +112,95 @@ This $\Delta k$ value is stored with the position and represents the liquidity b
 \end{enumerate}
 
 \section{Global LP Funding Rate}
-To address the temporary reduction in effective liquidity caused by open leveraged positions, Whiplash implements a global LP funding rate. This mechanism requires leverage traders to continuously pay funding fees to the liquidity pool, compensating spot traders for the borrowed liquidity. The funding rate is designed to increase quadratically with total leverage, creating a strong economic incentive to maintain a healthy pool state.
+To compensate liquidity providers for the borrowed liquidity, Whiplash implements a global funding rate that continuously repays the outstanding $\Delta k$ debt, realizing it as an increase in the pool's effective reserves. This mechanism is designed to increase quadratically with total leverage, creating a strong economic incentive to maintain a healthy pool state.
 
 \subsection{Funding Rate Formula}
-The funding rate is a function of the total borrowed liquidity relative to the pool's original constant product. Define the leverage ratio:
-\begin{equation}
-    r = \frac{\sum \Delta k_i}{k_{\text{original}}}
-\end{equation}
-
+The funding rate is a function of the total borrowed liquidity relative to the pool's current effective liquidity.
+\begin{align}
+\sum \Delta k_{\text{total}} &= \sum \Delta k_{\text{longs}} + \sum \Delta k_{\text{shorts}} \\
+k_e &= x_e \cdot y_e \\
+\text{LeverageRatio} &= \frac{\sum \Delta k_{\text{total}}}{k_e}
+\end{align}
 The funding rate per unit time is then:
 \begin{equation}
-    \text{FundingRate} = C \cdot \left( \frac{r}{1 - r} \right)^2 = C \cdot \left( \frac{\sum \Delta k_i}{k_{\text{original}} - \sum \Delta k_i} \right)^2
+    \text{FundingRate} = C \cdot (\text{LeverageRatio})^2
 \end{equation}
+where $C$ is a configurable constant.
 
-where $C$ is a configurable constant (default: 0.0001 per second). The second form is computationally optimized and equivalent to the first.
-\\\\
-This function has critical properties:
+\subsection{Implementation via Proportional Distribution}
+The protocol continuously and atomically updates its global state based on this funding rate. For any time interval $\Delta t$, the fees paid by each side of the market are calculated proportional to their share of the total debt:
+\begin{align}
+\text{Fees}_{\text{longs}} &= \text{FundingRate} \cdot (\sum \Delta k_{\text{longs}}) \cdot \Delta t \\
+\text{Fees}_{\text{shorts}} &= \text{FundingRate} \cdot (\sum \Delta k_{\text{shorts}}) \cdot \Delta t
+\end{align}
+These fees, which are denominated in units of $k$, must be converted back into their respective reserve assets to be realized. Long positions borrow the token, so their fee payments increase the effective token reserve. Short positions borrow the base asset, so their payments increase the effective base asset reserve.
+\begin{align}
+\Delta y_e &= \frac{\text{Fees}_{\text{longs}}}{x_e} \\
+\Delta x_e &= \frac{\text{Fees}_{\text{shorts}}}{y_e}
+\end{align}
+The effective reserves and debt pools are then updated. Simultaneously, the cumulative funding index $I(t)$ is updated for calculating individual position states.
+
+\subsection{Position Amortization via Funding}
+Funding payments act as a continuous amortization of the position's virtual debt ($\Delta k$) and its corresponding virtual claim on the pool's assets ($y_{\text{position}}$). This process is denominated in units of $k$, the AMM's constant product, representing a claim on the pool's abstract liquidity rather than a specific asset. This ensures the funding mechanism is independent of asset price fluctuations. As a position accrues funding fees, both its effective size and its effective debt decrease proportionally.
+
+To track this, we introduce the \textbf{Position Remaining Factor}, $f(t)$, for a position opened at time $t_{\text{open}}$:
+\begin{equation}
+    f(t) = 1 - (I(t) - I(t_{\text{open}}))
+\end{equation}
+This unitless factor represents the fraction of the original position that remains after accounting for funding payments. It allows us to calculate the effective values at any time $t$:
+
 \begin{itemize}
-    \item When $r = 0$ (no leverage), funding rate is zero
-    \item As $r \to 1$ (total $\Delta k$ approaches original $k$), funding rate $\to \infty$
-    \item Quadratic growth ensures leverage becomes prohibitively expensive before systemic risk
-    \item Creates a natural economic cap on total system leverage
+    \item \textbf{Effective Position Size}: $y_{\text{effective}}(t) = y_{\text{original}} \cdot f(t)$
+    \item \textbf{Effective Borrowed Liquidity}: $\Delta k_{\text{effective}}(t) = \Delta k_{\text{original}} \cdot f(t)$
 \end{itemize}
 
-\subsection{Implementation via Cumulative Index}
-The protocol uses two global accumulators to efficiently track funding without iterating over positions:
-\begin{itemize}
-    \item $\text{unrealized\_fees}$: Total fees owed to the pool, updated as $\Delta \text{unrealized\_fees} = \text{FundingRate}(r) \cdot (\sum \Delta k_i) \cdot \Delta t$
-    \item $I(t)$: Cumulative funding rate index, updated as $I(t_{\text{new}}) = I(t_{\text{old}}) + \text{FundingRate}(r) \cdot \Delta t$
-\end{itemize}
-When a position opens, the current $I(t)$ is stored with the position for later fee calculation.
+As the cumulative index $I(t)$ grows, $f(t)$ decreases, ensuring that both the position's claim and its debt are paid down over time.
 
 \section{Closing a Leveraged Position}
 
-When closing, the protocol calculates funding fees accrued, computes the effective $\Delta k$, determines the payout, and transfers directly from pool to user:
+When a trader closes their position at time $t_{\text{close}}$, the protocol uses the effective position size and effective borrowed liquidity to calculate the final payout. This process ensures that all accrued funding fees are settled implicitly within the closing swap.
 
+The steps are as follows:
 \begin{enumerate}
-    \item Calculate funding fees: $\text{funding\_due} = (I(t_{\text{close}}) - I(t_{\text{open}})) \cdot \Delta k_{\text{original}}$
-    \item Convert to $\Delta k$ repayment: $\Delta k_{\text{repaid}} = \text{funding\_due} \cdot y_{\text{current}}$
-    \item Compute effective debt: $\Delta k_{\text{effective}} = \Delta k_{\text{original}} - \Delta k_{\text{repaid}}$
-    \item Calculate payout: $X_{\text{out}} = \frac{x_{\text{current}} \cdot y_{\text{position}} - \Delta k_{\text{effective}}}{y_{\text{current}} + y_{\text{position}}}$
+    \item \textbf{Calculate the Position Remaining Factor}: The protocol first computes the remaining factor for the position based on the cumulative funding index:
+    \begin{equation}
+        f(t_{\text{close}}) = 1 - (I(t_{\text{close}}) - I(t_{\text{open}}))
+    \end{equation}
+    
+    \item \textbf{Determine Effective Values}: Using this factor, the effective position size ($S_{\text{effective}}$) and effective borrowed liquidity ($\Delta k_{\text{effective}}$) are calculated from their original values.
+
+    \item \textbf{Calculate Payout}: The final payout is determined by swapping the effective position size against the pool's current effective reserves while accounting for the repayment of the final effective borrowed liquidity.
+
+    For a long position (collateral in base asset, effective size $y_e$), the payout $P_{\text{base}}$ is:
+    \begin{equation}
+        P_{\text{base}} = \frac{x_e \cdot y_e - \Delta k_{\text{effective}}}{y_e + y_{\text{effective}}}
+    \end{equation}
+
+    For a short position (collateral in token asset, effective size $x_e$), the payout $P_{\text{token}}$ is:
+    \begin{equation}
+        P_{\text{token}} = \frac{y_e \cdot x_e - \Delta k_{\text{effective}}}{x_e + x_{\text{effective}}}
+    \end{equation}
 \end{enumerate}
 
-The payout already incorporates funding fees. Upon closing, the position's $\Delta k_{\text{original}}$ is removed from $\sum \Delta k_i$, funding fees are realized, and the funding rate is updated.
+Upon closing, the position's original $\Delta k$ is removed from its respective debt pool ($\sum \Delta k_{\text{longs}}$ or $\sum \Delta k_{\text{shorts}}$), and the effective reserves are updated by performing a reverse virtual swap of the position's effective size to settle its claim and receive the payout.
 
 \section{Liquidation Mechanism}
 
-A position becomes liquidatable when $X_{\text{out}} \leq \frac{\Delta k_{\text{effective}}}{x_{\text{current}}} \times 1.05$ (5\% buffer). The liquidator receives a reward equal to $y_{\text{position}} - \Delta y_{\text{restore}}$ where $\Delta y_{\text{restore}} = \frac{\Delta k_{\text{effective}}}{x_{\text{current}}}$ is the amount needed to restore the pool's invariant. Since positions are virtual, liquidation simply updates pool accounting and transfers the reward directly from the vault to the liquidator.
+A position becomes liquidatable when its payout is less than or equal to a liquidation buffer (e.g., 5\%) above the value required to repay its final effective debt, $\Delta k_{\text{effective}}$. Let $P$ be the calculated payout. The condition is:
+\begin{equation}
+P \leq \frac{\Delta k_{\text{effective}}}{R_e_{\text{payout}}} \times 1.05
+\end{equation}
+where $R_e_{\text{payout}}$ is the pool's effective reserve of the payout asset.
+
+The liquidator's reward is the portion of the position's effective size ($S_{\text{effective}}$) that is not needed to restore the pool's invariant. The amount needed is $\Delta R_{\text{restore}} = \frac{\Delta k_{\text{effective}}}{R_e_{\text{collateral}}}$, where $R_e_{\text{collateral}}$ is the effective reserve of the collateral asset. The reward is:
+\begin{equation}
+\text{Reward} = S_{\text{effective}} - \Delta R_{\text{restore}}
+\end{equation}
+Upon liquidation, the pool's state is updated using the same logic as closing a position.
 
 \section{Limbo State}
 
-A position enters "limbo" when it meets the liquidation condition but no liquidator has closed it (unprofitable). It can exit limbo if price movements cause recovery: $x_{\text{current}} \cdot y_{\text{position}} > \Delta k_{\text{effective}}$. This protects traders from flash crash liquidations. Underwater positions still pay the LP funding rate, and thus will go to 0 (and fully repay their debt) over time.
+A position enters "limbo" when it meets the liquidation condition but no liquidator has closed it. It can exit limbo if price movements cause recovery: $x_e \cdot y_{\text{effective}} > \Delta k_{\text{effective}}$. Underwater positions still pay the LP funding rate, and thus their effective debt and size will amortize to 0 over time.
 
 \section{Liquidity Provisioning and Launching}
 
@@ -181,16 +220,16 @@ The bonding curve based token launch mechanism allows early traders to become li
 
 \subsection{Economic Incentive Alignment}
 
-The quadratic funding rate and virtual position model create powerful incentive alignment across all participants:
+The quadratic funding rate and effective reserve model create powerful incentive alignment:
 \begin{itemize}
-    \item \textbf{Leverage traders}: Early closure incentivized when pool leverage is high; continuous debt repayment through funding
-    \item \textbf{Spot traders}: Real-time benefit from LP funding rate: $k_{\text{effective}} = k_{\text{current}} + \text{unrealized\_fees} \cdot y_{\text{current}}$ in swap pricing, providing better execution as if funding fees were already realized
-    \item \textbf{Protocol}: Natural economic cap on total leverage ($\sum \Delta k_i \to k_{\text{original}}$ makes funding $\to \infty$)
+    \item \textbf{Leverage traders}: Continuous debt repayment through funding incentivizes closing positions, especially when the funding rate is high due to heavy pool utilization.
+    \item \textbf{Spot traders \& LPs}: Benefit from the continuous growth of the effective reserves, which are fed by the funding payments from leverage traders. This leads to deeper liquidity and better execution prices over time.
+    \item \textbf{Protocol}: The dynamic funding rate creates a natural economic cap on total system leverage. As total $\Delta k$ grows relative to the effective liquidity $k_e$, the funding rate accelerates, making new leverage prohibitively expensive.
 \end{itemize}
 
 \section{Considerations and Future Work}
 
-Whiplash makes the tradeoff of temporarily reducing effective liquidity for traders in order to power leverage, which is restored through the LP funding rate and settled when the positions are closed/liquidated. This tradeoff was chosen because in order to not reduce effective liquidity for traders, solvency would not be guaranteed in extreme cases (bank runs).
+Whiplash makes the tradeoff of temporarily reducing effective liquidity for traders in order to power leverage. This liquidity is restored through the LP funding rate and settled when positions are closed or liquidated. This tradeoff was chosen because in order to not reduce effective liquidity for traders, solvency would not be guaranteed in extreme cases (bank runs).
 \\\\
 However, if liquidations were integrated at the protocol level (i.e. swaps liquidate positions that would become underwater), effective liquidity could remain constant. This is an ideal scenario - designing such a liquidation mechanism that can stay within the limits of compute usage in smart contracts is very difficult, if possible.
 \\\\

@@ -20,12 +20,12 @@ pub mod whiplash {
 
     pub fn launch(
         ctx: Context<Launch>, 
-        virtual_sol_reserve: u64,
+        sol_amount: u64,
         token_name: String,
         token_ticker: String,
         metadata_uri: String,
     ) -> Result<()> {
-        instructions::launch::handle_launch(ctx, virtual_sol_reserve, token_name, token_ticker, metadata_uri)
+        instructions::launch::handle_launch(ctx, sol_amount, token_name, token_ticker, metadata_uri)
     }
 
     pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
