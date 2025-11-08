@@ -12,7 +12,7 @@ pub use error::*;
 pub use events::*;
 pub use utils::*;
 
-declare_id!("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
+declare_id!("5cZM87xG3opyuDjBedCpxJ6mhDyztVXLEB18tcULCmmW");
 
 #[program]
 pub mod facemelt {

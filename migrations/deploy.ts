@@ -77,14 +77,6 @@ async function main() {
     console.log("Waiting for Facemelt program deployment to be confirmed...");
     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-    // Verify Facemelt program is deployed
-    const facemeltProgramId = new PublicKey("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
-    const facemeltProgramInfo = await provider.connection.getAccountInfo(facemeltProgramId);
-    if (!facemeltProgramInfo || !facemeltProgramInfo.executable) {
-      throw new Error("Facemelt program is not deployed or not executable");
-    }
-    console.log("Facemelt program deployment verified");
-
     // Initialize Facemelt program client
     console.log("Initializing Facemelt program client...");
     
@@ -94,6 +86,17 @@ async function main() {
       throw new Error(`IDL file not found at ${idlPath}`);
     }
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
+    
+    // Get program ID from IDL (this is the actual deployed program ID)
+    const facemeltProgramId = new PublicKey(idl.address);
+    console.log("Program ID from IDL:", facemeltProgramId.toString());
+    
+    // Verify Facemelt program is deployed
+    const facemeltProgramInfo = await provider.connection.getAccountInfo(facemeltProgramId);
+    if (!facemeltProgramInfo || !facemeltProgramInfo.executable) {
+      throw new Error("Facemelt program is not deployed or not executable");
+    }
+    console.log("Facemelt program deployment verified");
     
     const facemeltProgram = new Program(
       idl,
@@ -142,12 +145,21 @@ async function main() {
     );
     console.log("Metadata PDA:", metadataPda.toString());
 
+    // Optional parameters for pool configuration
+    // Pass null to use defaults:
+    // - funding_constant_c: PRECISION / 10000 = 0.0001/sec
+    // - liquidation_divergence_threshold: 10 (10%)
+    const fundingConstantC = null; // Use default
+    const liquidationDivergenceThreshold = null; // Use default
+    
     const tx = await facemeltProgram.methods
       .launch(
         virtualSolReserve,
         tokenName,
         tokenTicker,
-        metadataUri
+        metadataUri,
+        fundingConstantC,
+        liquidationDivergenceThreshold
       )
       .accounts({
         authority: provider.wallet.publicKey,
