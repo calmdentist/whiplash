@@ -36,12 +36,30 @@ pub struct Pool {
     // The last time the funding accumulator was updated
     pub last_update_timestamp: i64,
     
+    // ----- Price Oracle fields -----
+    
+    // EMA of the price (sol_reserve / token_reserve) in fixed-point
+    pub ema_price: u128,
+    
+    // Whether the EMA has been initialized
+    pub ema_initialized: bool,
+    
     // Bump seed for PDA derivation
     pub bump: u8,
 }
 
 impl Pool {
     pub const LEN: usize = 8 + Pool::INIT_SPACE;
+    
+    // EMA half-life: 5 minutes (price moves have ~5min to prove they're real)
+    pub const EMA_HALF_LIFE_SECONDS: i64 = 5 * 60;
+    
+    // Liquidation divergence threshold: 10%
+    // If spot < EMA by >10%, likely manipulation
+    pub const LIQUIDATION_DIVERGENCE_THRESHOLD: u128 = 10;
+    
+    // Fixed-point precision for price calculations
+    const PRICE_PRECISION: u128 = 1u128 << 64; // 2^64
     
     // Update the funding rate accumulators based on time elapsed
     pub fn update_funding_accumulators(&mut self, current_timestamp: i64) -> Result<()> {
@@ -186,6 +204,9 @@ impl Pool {
         
         self.last_update_timestamp = current_timestamp;
         
+        // Update EMA price after all reserve changes
+        self.update_ema_price_internal(current_timestamp)?;
+        
         Ok(())
     }
     
@@ -305,5 +326,107 @@ impl Pool {
         };
         
         Ok(output)
+    }
+    
+    // Internal function to update EMA price (called from update_funding_accumulators)
+    fn update_ema_price_internal(&mut self, current_timestamp: i64) -> Result<()> {
+        // Calculate current spot price (in fixed-point)
+        // price = effective_sol_reserve / effective_token_reserve
+        let current_price = (self.effective_sol_reserve as u128)
+            .checked_mul(Self::PRICE_PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(self.effective_token_reserve as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        if !self.ema_initialized {
+            // First update: initialize EMA to current price
+            self.ema_price = current_price;
+            self.ema_initialized = true;
+            return Ok(());
+        }
+        
+        // Calculate time elapsed since last update (already calculated in update_funding_accumulators)
+        let time_delta = current_timestamp
+            .checked_sub(self.last_update_timestamp)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        if time_delta <= 0 {
+            return Ok(()); // No time passed, skip update
+        }
+        
+        // Calculate EMA decay factor using linear approximation
+        // alpha ≈ time_delta / (half_life + time_delta)
+        let denominator = Self::EMA_HALF_LIFE_SECONDS
+            .checked_add(time_delta)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // alpha = (time_delta * PRECISION) / denominator
+        let alpha = (time_delta as u128)
+            .checked_mul(Self::PRICE_PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(denominator as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // EMA = EMA_old * (1 - alpha) + price * alpha
+        let ema_weight = Self::PRICE_PRECISION
+            .checked_sub(alpha)
+            .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
+        
+        let ema_component = self.ema_price
+            .checked_mul(ema_weight)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(Self::PRICE_PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        let price_component = current_price
+            .checked_mul(alpha)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(Self::PRICE_PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        self.ema_price = ema_component
+            .checked_add(price_component)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        Ok(())
+    }
+    
+    // Get current spot price in fixed-point
+    pub fn get_spot_price(&self) -> Result<u128> {
+        (self.effective_sol_reserve as u128)
+            .checked_mul(Self::PRICE_PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(self.effective_token_reserve as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))
+    }
+    
+    // Check if price divergence is within safe bounds for liquidations
+    // Returns true if safe to liquidate, false if likely manipulation
+    pub fn check_liquidation_price_safety(&self) -> Result<bool> {
+        if !self.ema_initialized {
+            // No EMA yet, allow liquidations (shouldn't happen after first swap)
+            return Ok(true);
+        }
+        
+        let spot_price = self.get_spot_price()?;
+        
+        // If spot is above or equal to EMA, price is rising or stable - safe to liquidate
+        if spot_price >= self.ema_price {
+            return Ok(true);
+        }
+        
+        // Calculate divergence percentage: ((ema - spot) / ema) * 100
+        let price_diff = self.ema_price
+            .checked_sub(spot_price)
+            .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
+        
+        let divergence_percentage = price_diff
+            .checked_mul(100)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(self.ema_price)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Safe to liquidate if divergence is within threshold
+        Ok(divergence_percentage <= Self::LIQUIDATION_DIVERGENCE_THRESHOLD)
     }
 } 

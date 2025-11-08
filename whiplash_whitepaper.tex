@@ -186,17 +186,27 @@ Upon closing, the position's original $\Delta k$ is removed from its respective 
 
 \section{Liquidation Mechanism}
 
-A position becomes liquidatable when its payout is less than or equal to a liquidation buffer (e.g., 5\%) above the value required to repay its final effective debt, $\Delta k_{\text{effective}}$. Let $P$ be the calculated payout. The condition is:
-\begin{equation}
-P \leq \frac{\Delta k_{\text{effective}}}{R_e_{\text{payout}}} \times 1.05
-\end{equation}
-where $R_e_{\text{payout}}$ is the pool's effective reserve of the payout asset.
+A position becomes liquidatable when its payout is less than or equal to 5\% of its gross value. However, to prevent manipulation-based liquidations, Whiplash employs an \textbf{EMA Price Oracle} that blocks liquidations when rapid price movements are detected.
 
-The liquidator's reward is the portion of the position's effective size ($S_{\text{effective}}$) that is not needed to restore the pool's invariant. The amount needed is $\Delta R_{\text{restore}} = \frac{\Delta k_{\text{effective}}}{R_e_{\text{collateral}}}$, where $R_e_{\text{collateral}}$ is the effective reserve of the collateral asset. The reward is:
+\subsection{EMA Oracle Protection}
+
+The protocol tracks an exponential moving average (EMA) of the price with a 5-minute half-life. Before allowing liquidation, it checks:
 \begin{equation}
-\text{Reward} = S_{\text{effective}} - \Delta R_{\text{restore}}
+\frac{P_{\text{EMA}} - P_{\text{spot}}}{P_{\text{EMA}}} \leq 10\%
 \end{equation}
-Upon liquidation, the pool's state is updated using the same logic as closing a position.
+
+If the spot price has diverged more than 10\% below the EMA, liquidation is blocked. This prevents atomically profitable manipulation attacks where an adversary crashes the price temporarily to liquidate positions, then immediately reverts the price.
+
+\subsection{Liquidation Conditions}
+
+A position can be liquidated if and only if:
+\begin{enumerate}
+    \item The payout is positive (position not underwater)
+    \item The payout $P \leq 5\%$ of the position's gross value
+    \item The EMA divergence check passes (no manipulation detected)
+\end{enumerate}
+
+The liquidator's reward is the entire remaining payout. Upon liquidation, the pool's state is updated using the same logic as closing a position, with the effective $\Delta k$ removed from the global debt tracking.
 
 \section{Limbo State}
 

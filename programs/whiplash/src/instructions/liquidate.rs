@@ -56,8 +56,16 @@ pub struct Liquidate<'info> {
 
 pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     // Update funding rate accumulators before any position operations
+    // This also updates the EMA price
     let current_timestamp = Clock::get()?.unix_timestamp;
     ctx.accounts.pool.update_funding_accumulators(current_timestamp)?;
+    
+    // Check price divergence to prevent manipulation-based liquidations
+    let price_safe = ctx.accounts.pool.check_liquidation_price_safety()?;
+    require!(
+        price_safe,
+        WhiplashError::LiquidationPriceManipulation
+    );
     
     let position = &ctx.accounts.position;
     let pool = &ctx.accounts.pool;
@@ -119,18 +127,20 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
         if product_val <= effective_delta_k {
-            0u128
-        } else {
-            let numerator = product_val
-                .checked_sub(effective_delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            let denominator = y_e
-                .checked_add(effective_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            numerator
-                .checked_div(denominator)
-                .ok_or(error!(WhiplashError::MathOverflow))?
+            // Underwater: closing would require taking from pool (bad debt)
+            // Don't liquidate - let funding fees amortize the position to zero
+            return Err(error!(WhiplashError::PositionNotLiquidatable));
         }
+        
+        let numerator = product_val
+            .checked_sub(effective_delta_k)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        let denominator = y_e
+            .checked_add(effective_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        numerator
+            .checked_div(denominator)
+            .ok_or(error!(WhiplashError::MathOverflow))?
     } else {
         // Short: returns SOL and gets tokens
         // payout = (y_e * effective_size - effective_delta_k) / (x_e + effective_size)
@@ -139,21 +149,24 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
         if product_val <= effective_delta_k {
-            0u128
-        } else {
-            let numerator = product_val
-                .checked_sub(effective_delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            let denominator = x_e
-                .checked_add(effective_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
-            numerator
-                .checked_div(denominator)
-                .ok_or(error!(WhiplashError::MathOverflow))?
+            // Underwater: closing would require taking from pool (bad debt)
+            // Don't liquidate - let funding fees amortize the position to zero
+            return Err(error!(WhiplashError::PositionNotLiquidatable));
         }
+        
+        let numerator = product_val
+            .checked_sub(effective_delta_k)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        let denominator = x_e
+            .checked_add(effective_size_u128)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        numerator
+            .checked_div(denominator)
+            .ok_or(error!(WhiplashError::MathOverflow))?
     };
 
-    // 3. Check if the net payout is less than 5% of the gross value
+    // 3. Check if the net payout is AT MOST 5% of the gross value
+    // Position is liquidatable when: payout <= 5% of position_value
     let liquidation_threshold = position_value_in_collateral
         .checked_mul(5)
         .ok_or(error!(WhiplashError::MathOverflow))?

@@ -10,6 +10,8 @@ total_delta_k_longs - sum of original delta_k from all open LONG positions
 total_delta_k_shorts - sum of original delta_k from all open SHORT positions
 cumulative_funding_accumulator
 last_updated_timestamp
+ema_price - exponential moving average of price (for manipulation detection)
+ema_initialized - whether EMA has been set
 
 function update_funding_accumulators(self, current_timestamp):
     delta_t = current_timestamp - self.last_updated_timestamp
@@ -39,6 +41,26 @@ function update_funding_accumulators(self, current_timestamp):
     self.total_delta_k_shorts -= fees_paid_by_shorts
 
     self.last_updated_timestamp = current_timestamp
+    
+    # Update EMA price oracle (nested in funding accumulator update)
+    current_price = self.effective_sol_reserve / self.effective_token_reserve
+    if not self.ema_initialized:
+        self.ema_price = current_price
+        self.ema_initialized = true
+    else:
+        alpha = delta_t / (EMA_HALF_LIFE + delta_t)  # 5 minute half-life
+        self.ema_price = self.ema_price * (1 - alpha) + current_price * alpha
+
+function check_liquidation_price_safety(self):
+    if not self.ema_initialized:
+        return true  # Allow if EMA not yet initialized
+    
+    spot_price = self.effective_sol_reserve / self.effective_token_reserve
+    if spot_price >= self.ema_price:
+        return true  # Price rising or stable, safe to liquidate
+    
+    divergence_pct = ((self.ema_price - spot_price) / self.ema_price) * 100
+    return divergence_pct <= 10  # Block liquidation if >10% divergence
 
 function calculate_position_remaining_factor(self, entry_funding_accumulator):
     self.update_funding_accumulators(current_timestamp())
@@ -126,6 +148,11 @@ function close_position(position):
     return payout, payout_is_sol
 
 function liquidate(position, liquidator):
+    pool.update_funding_accumulators(current_timestamp())
+    
+    # 0. Check EMA oracle - block if price manipulation detected
+    assert(pool.check_liquidation_price_safety(), "Liquidation blocked: price manipulation detected")
+    
     remaining_factor = pool.calculate_position_remaining_factor(position.entry_funding_accumulator)
     effective_size = position.size * remaining_factor
     effective_delta_k = position.delta_k * remaining_factor
@@ -139,7 +166,10 @@ function liquidate(position, liquidator):
     else:
         payout = (pool.effective_token_reserve * effective_size - effective_delta_k) / (pool.effective_sol_reserve + effective_size)
     
-    # 3. Check if the net payout is less than 5% of the gross value.
+    # 3. Prevent bad debt: position must not be underwater
+    assert(payout > 0, "Position underwater - cannot liquidate")
+    
+    # 4. Check if the net payout is less than 5% of the gross value.
     liquidation_threshold = position_value_in_collateral * 0.05
     assert(payout <= liquidation_threshold, "Position not liquidatable")
 

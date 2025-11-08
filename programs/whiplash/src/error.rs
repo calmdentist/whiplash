@@ -64,4 +64,7 @@ pub enum WhiplashError {
 
     #[msg("Excessive leverage - total delta_k ratio too high")]
     ExcessiveLeverage,
+    
+    #[msg("Liquidation blocked: spot price diverged too far from EMA (possible manipulation)")]
+    LiquidationPriceManipulation,
 } 
