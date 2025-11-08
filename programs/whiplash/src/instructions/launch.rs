@@ -95,10 +95,9 @@ pub fn handle_launch(
     // Initialize pool state
     let pool = &mut ctx.accounts.pool;
     pool.authority = ctx.accounts.authority.key();
-    pool.token_y_mint = ctx.accounts.token_mint.key();
-    pool.token_y_vault = ctx.accounts.token_vault.key();
+    pool.token_mint = ctx.accounts.token_mint.key();
+    pool.token_vault = ctx.accounts.token_vault.key();
     pool.bump = *ctx.bumps.get("pool").unwrap();
-    pool.creation_timestamp = Clock::get()?.unix_timestamp as u64;
     
     // Calculate total supply with proper overflow checks
     let total_supply = 1_000_000_000_000_000u64; // 1 billion with 6 decimals
@@ -202,24 +201,18 @@ pub fn handle_launch(
     })?;
     
     // Update pool state with proper overflow checks
-    pool.token_y_amount = total_supply;
-    // Set real SOL reserves to the transferred amount
-    pool.lamports = sol_amount;
+    pool.token_reserve = total_supply;
+    pool.sol_reserve = sol_amount;
+    
+    // Initialize effective reserves (same as real reserves at launch)
+    pool.effective_token_reserve = total_supply;
+    pool.effective_sol_reserve = sol_amount;
     
     // Initialize funding rate fields
-    let total_x = sol_amount as u128;
-    let total_y = total_supply as u128;
-    pool.original_k = total_x
-        .checked_mul(total_y)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    pool.total_delta_k = 0;
-    pool.last_funding_timestamp = Clock::get()?.unix_timestamp;
-    pool.cumulative_funding_rate_index = 0;
-    pool.unrealized_funding_fees = 0;
-    
-    // Initialize leveraged amounts to 0
-    pool.leveraged_token_y_amount = 0;
-    pool.leveraged_sol_amount = 0;
+    pool.total_delta_k_longs = 0;
+    pool.total_delta_k_shorts = 0;
+    pool.last_update_timestamp = Clock::get()?.unix_timestamp;
+    pool.cumulative_funding_accumulator = 0;
     
     // Emit the pool launched event
     emit!(PoolLaunched {

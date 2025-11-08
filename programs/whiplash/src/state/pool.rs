@@ -12,19 +12,23 @@ pub struct Pool {
     // Token vault (holds the Token reserves)
     pub token_vault: Pubkey,
     
-    // Real Token reserves (amount held in the vault)
+    // Real Token reserves (amount held in the vault, for auditing)
     pub token_reserve: u64,
     
-    // Real SOL reserves (in lamports)
+    // Real SOL reserves (in lamports, for auditing)
     pub sol_reserve: u64,
 
-    // The current constant product of the pool
-    pub k: u128,
+    // Effective reserves (used for all pricing and swaps)
+    pub effective_sol_reserve: u64,
+    pub effective_token_reserve: u64,
 
     // ----- Funding Rate fields -----
 
-    // The sum of delta_k from all open leveraged positions
-    pub total_delta_k: u128,
+    // The sum of original delta_k from all open LONG positions
+    pub total_delta_k_longs: u128,
+    
+    // The sum of original delta_k from all open SHORT positions
+    pub total_delta_k_shorts: u128,
 
     // A continuously increasing value representing the total funding rate accrued per unit of delta_k
     pub cumulative_funding_accumulator: u128,
@@ -49,42 +53,60 @@ impl Pool {
             return Ok(());
         }
         
-        if self.total_delta_k == 0 {
+        let total_delta_k = self.total_delta_k_longs
+            .checked_add(self.total_delta_k_shorts)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        if total_delta_k == 0 {
             self.last_update_timestamp = current_timestamp;
             return Ok(());
         }
         
-        // Funding rate is based on the current effective total_delta_k relative to the current effective k.
-        // leverage_term = total_delta_k / k
-        // funding_rate = C * (leverage_term)^2
+        // Funding rate is based on the total leverage relative to the current effective k
+        // leverage_ratio = total_delta_k / effective_k
+        // funding_rate = C * (leverage_ratio)^2
         
-        require!(self.k > 0, crate::WhiplashError::InsufficientLiquidity);
-        
-        // Use fixed-point precision for accurate calculation
-        const PRECISION_BITS: u32 = 64;
-        const PRECISION: u128 = 1u128 << PRECISION_BITS;
-        
-        // leverage_term = (total_delta_k * PRECISION) / k
-        let leverage_term = self.total_delta_k
-            .checked_mul(PRECISION)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?
-            .checked_div(self.k)
+        let effective_k = (self.effective_sol_reserve as u128)
+            .checked_mul(self.effective_token_reserve as u128)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // leverage_term_squared = (leverage_term * leverage_term) / PRECISION
-        let leverage_term_squared = leverage_term
-            .checked_mul(leverage_term)
+        require!(effective_k > 0, crate::WhiplashError::InsufficientLiquidity);
+        
+        // Use fixed-point precision for accurate calculation
+        // Using 32 bits instead of 64 to avoid overflow when squaring leverage_ratio
+        const PRECISION_BITS: u32 = 32;
+        const PRECISION: u128 = 1u128 << PRECISION_BITS;
+        
+        // To avoid overflow, we scale down both total_delta_k and effective_k before calculating the ratio
+        // This preserves the ratio while keeping numbers manageable
+        const SCALE_FACTOR: u128 = 1_000_000_000; // 1 billion scale factor
+        
+        let scaled_delta_k = total_delta_k / SCALE_FACTOR;
+        let scaled_effective_k = effective_k / SCALE_FACTOR;
+        
+        require!(scaled_effective_k > 0, crate::WhiplashError::InsufficientLiquidity);
+        
+        // leverage_ratio = (scaled_delta_k * PRECISION) / scaled_effective_k
+        let leverage_ratio = scaled_delta_k
+            .checked_mul(PRECISION)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(scaled_effective_k)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // leverage_ratio_squared = (leverage_ratio * leverage_ratio) / PRECISION
+        let leverage_ratio_squared = leverage_ratio
+            .checked_mul(leverage_ratio)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_div(PRECISION)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // Calculate funding rate: C * leverage_term_squared
+        // Calculate funding rate: C * leverage_ratio_squared
         // We'll use C = 0.0001 per second (represented in fixed-point)
         let c_constant: u128 = PRECISION / 10000; // 0.0001 in fixed-point
         
-        // funding_rate = (C * leverage_term_squared) / PRECISION
+        // funding_rate = (C * leverage_ratio_squared) / PRECISION
         let funding_rate = c_constant
-            .checked_mul(leverage_term_squared)
+            .checked_mul(leverage_ratio_squared)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_div(PRECISION)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
@@ -99,21 +121,67 @@ impl Pool {
             .checked_add(delta_funding_index)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // Calculate the total fees accrued across all positions during this period
-        // accrued_fees = funding_rate * total_delta_k * delta_t
-        let accrued_fees = funding_rate
-            .checked_mul(self.total_delta_k)
+        // Calculate fees paid by each side, proportional to their share of the total debt
+        // fees_paid_by_longs = (funding_rate * total_delta_k_longs * delta_t) / PRECISION
+        // funding_rate is in fixed-point, so we divide by PRECISION at the end
+        // To avoid overflow, we use scaled values
+        let scaled_delta_k_longs = self.total_delta_k_longs / SCALE_FACTOR;
+        let scaled_delta_k_shorts = self.total_delta_k_shorts / SCALE_FACTOR;
+        
+        let fees_temp_longs = funding_rate
+            .checked_mul(scaled_delta_k_longs)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_mul(delta_t as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(PRECISION)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // Realize the fees directly into the pool's state
-        self.k = self.k
-            .checked_add(accrued_fees)
+        let fees_temp_shorts = funding_rate
+            .checked_mul(scaled_delta_k_shorts)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_mul(delta_t as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?
+            .checked_div(PRECISION)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        self.total_delta_k = self.total_delta_k
-            .checked_sub(accrued_fees)
+        // Now unscale to get the actual fees
+        let fees_paid_by_longs = fees_temp_longs
+            .checked_mul(SCALE_FACTOR)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        let fees_paid_by_shorts = fees_temp_shorts
+            .checked_mul(SCALE_FACTOR)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        
+        // Convert k-denominated fees back to the appropriate reserve asset and distribute
+        // effective_token_reserve += fees_paid_by_longs / effective_sol_reserve
+        if fees_paid_by_longs > 0 {
+            let token_fee_increase = fees_paid_by_longs
+                .checked_div(self.effective_sol_reserve as u128)
+                .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+            
+            self.effective_token_reserve = self.effective_token_reserve
+                .checked_add(token_fee_increase as u64)
+                .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        }
+        
+        // effective_sol_reserve += fees_paid_by_shorts / effective_token_reserve
+        if fees_paid_by_shorts > 0 {
+            let sol_fee_increase = fees_paid_by_shorts
+                .checked_div(self.effective_token_reserve as u128)
+                .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+            
+            self.effective_sol_reserve = self.effective_sol_reserve
+                .checked_add(sol_fee_increase as u64)
+                .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+        }
+        
+        // Funding payments reduce the outstanding total debt
+        self.total_delta_k_longs = self.total_delta_k_longs
+            .checked_sub(fees_paid_by_longs)
+            .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
+        
+        self.total_delta_k_shorts = self.total_delta_k_shorts
+            .checked_sub(fees_paid_by_shorts)
             .ok_or(error!(crate::WhiplashError::MathUnderflow))?;
         
         self.last_update_timestamp = current_timestamp;
@@ -129,7 +197,7 @@ impl Pool {
         entry_funding_accumulator: u128,
     ) -> Result<u128> {
         // Use the same fixed-point precision as in update_funding_accumulators
-        const PRECISION_BITS: u32 = 64;
+        const PRECISION_BITS: u32 = 32;
         const PRECISION: u128 = 1u128 << PRECISION_BITS;
         
         // Calculate the funding index difference
@@ -151,27 +219,30 @@ impl Pool {
         Ok(remaining_factor)
     }
     
-    // Calculate output amount for a swap against the live, effective k
+    // Calculate output amount for a swap using the effective reserves
     // input_is_sol: true if input is SOL, false if input is Token
     pub fn calculate_output(&self, input_amount: u64, input_is_sol: bool) -> Result<u64> {
         if input_amount == 0 {
             return Err(error!(crate::WhiplashError::ZeroSwapAmount));
         }
         
-        // Check if reserves are sufficient
-        if self.sol_reserve == 0 || self.token_reserve == 0 {
+        // Check if effective reserves are sufficient
+        if self.effective_sol_reserve == 0 || self.effective_token_reserve == 0 {
             return Err(error!(crate::WhiplashError::InsufficientLiquidity));
         }
         
-        require!(self.k > 0, crate::WhiplashError::InsufficientLiquidity);
+        // Calculate effective k
+        let effective_k = (self.effective_sol_reserve as u128)
+            .checked_mul(self.effective_token_reserve as u128)
+            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // Swaps are always against the live, effective k
-        let k_to_use = self.k;
+        require!(effective_k > 0, crate::WhiplashError::InsufficientLiquidity);
         
         let output = if input_is_sol {
             // Input is SOL, output is TOKEN
-            let x = self.sol_reserve as u128;
-            let y = self.token_reserve as u128;
+            // output = effective_token_reserve - (k / (effective_sol_reserve + input_amount))
+            let x = self.effective_sol_reserve as u128;
+            let y = self.effective_token_reserve as u128;
             let input = input_amount as u128;
             
             // x_new = x + input_amount
@@ -179,12 +250,12 @@ impl Pool {
                 .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
             // y_new = k / x_new (round up to protect the pool)
-            let mut y_new = k_to_use
+            let mut y_new = effective_k
                 .checked_div(x_new)
                 .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
             // Round up if there's a remainder
-            if k_to_use % x_new != 0 {
+            if effective_k % x_new != 0 {
                 y_new = y_new.checked_add(1)
                     .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             }
@@ -201,8 +272,9 @@ impl Pool {
             output_amount as u64
         } else {
             // Input is TOKEN, output is SOL
-            let x = self.sol_reserve as u128;
-            let y = self.token_reserve as u128;
+            // output = effective_sol_reserve - (k / (effective_token_reserve + input_amount))
+            let x = self.effective_sol_reserve as u128;
+            let y = self.effective_token_reserve as u128;
             let input = input_amount as u128;
             
             // y_new = y + input_amount
@@ -210,12 +282,12 @@ impl Pool {
                 .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
             // x_new = k / y_new (round up to protect the pool)
-            let mut x_new = k_to_use
+            let mut x_new = effective_k
                 .checked_div(y_new)
                 .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             
             // Round up if there's a remainder
-            if k_to_use % y_new != 0 {
+            if effective_k % y_new != 0 {
                 x_new = x_new.checked_add(1)
                     .ok_or(error!(crate::WhiplashError::MathOverflow))?;
             }

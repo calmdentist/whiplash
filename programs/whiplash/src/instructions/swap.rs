@@ -11,7 +11,7 @@ pub struct Swap<'info> {
         mut,
         seeds = [
             b"pool".as_ref(),
-            pool.token_y_mint.as_ref(),
+            pool.token_mint.as_ref(),
         ],
         bump = pool.bump,
     )]
@@ -19,11 +19,11 @@ pub struct Swap<'info> {
     
     #[account(
         mut,
-        constraint = token_y_vault.key() == pool.token_y_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.mint == pool.token_y_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
     )]
-    pub token_y_vault: Account<'info, TokenAccount>,
+    pub token_vault: Account<'info, TokenAccount>,
     
     /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
     #[account(mut)]
@@ -53,10 +53,10 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     let is_sol_to_y = ctx.accounts.user_token_in.owner == &anchor_lang::solana_program::system_program::ID;
     
     if is_sol_to_y {
-        // For SOL to token Y, we need to verify user_token_out is a token Y account
+        // For SOL to token, we need to verify user_token_out is a token account
         let user_token_out_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_out)?;
         require!(
-            user_token_out_account.mint == ctx.accounts.pool.token_y_mint,
+            user_token_out_account.mint == ctx.accounts.pool.token_mint,
             WhiplashError::InvalidTokenAccounts
         );
         require!(
@@ -64,17 +64,17 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             WhiplashError::InvalidTokenAccounts
         );
     } else {
-        // For token Y to SOL, we need to verify user_token_in is a token account that holds token Y
+        // For token to SOL, we need to verify user_token_in is a token account
         let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
-            user_token_in_account.mint == ctx.accounts.pool.token_y_mint,
+            user_token_in_account.mint == ctx.accounts.pool.token_mint,
             WhiplashError::InvalidTokenAccounts
         );
         require!(
             user_token_in_account.owner == ctx.accounts.user.key(),
             WhiplashError::InvalidTokenAccounts
         );
-        // For a token Y to SOL swap, we need to verify the user_token_out is the user's wallet for receiving SOL
+        // For a token to SOL swap, we need to verify the user_token_out is the user's wallet for receiving SOL
         // For a SOL output, the account must be a system account (wallet)
         require!(
             ctx.accounts.user_token_out.key() == ctx.accounts.user.key(),
@@ -85,13 +85,7 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     // --------------------------------------------------
     // Calculate output using effective liquidity
     // --------------------------------------------------
-    let amount_out = if is_sol_to_y {
-        // X → Y path
-        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
-    } else {
-        // Y → X path
-        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
-    };
+    let amount_out = ctx.accounts.pool.calculate_output(amount_in, is_sol_to_y)?;
     
     // Check minimum output amount
     require!(amount_out >= min_amount_out, WhiplashError::SlippageToleranceExceeded);
@@ -112,16 +106,16 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             ],
         )?;
 
-        // Transfer token Y from vault to user
+        // Transfer token from vault to user
         let pool_signer_seeds = &[
             b"pool".as_ref(),
-            ctx.accounts.pool.token_y_mint.as_ref(),
+            ctx.accounts.pool.token_mint.as_ref(),
             &[ctx.accounts.pool.bump],
         ];
         let pool_signer = &[&pool_signer_seeds[..]];
         
         let cpi_accounts_out = Transfer {
-            from: ctx.accounts.token_y_vault.to_account_info(),
+            from: ctx.accounts.token_vault.to_account_info(),
             to: ctx.accounts.user_token_out.to_account_info(),
             authority: ctx.accounts.pool.to_account_info(),
         };
@@ -132,11 +126,11 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         );
         token::transfer(cpi_ctx_out, amount_out)?;
     } else {
-        // This is a token Y to SOL swap
-        // Transfer token Y from user to vault
+        // This is a token to SOL swap
+        // Transfer token from user to vault
         let cpi_accounts_in = Transfer {
             from: ctx.accounts.user_token_in.to_account_info(),
-            to: ctx.accounts.token_y_vault.to_account_info(),
+            to: ctx.accounts.token_vault.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         };
         let cpi_ctx_in = CpiContext::new(
@@ -162,16 +156,25 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     }
     
     // Update pool reserves
+    // Spot swaps update both real and effective reserves
     let pool = &mut ctx.accounts.pool;
     if is_sol_to_y {
-        pool.lamports = pool.lamports.checked_add(amount_in)
+        pool.sol_reserve = pool.sol_reserve.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
+        pool.token_reserve = pool.token_reserve.checked_sub(amount_out)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+        pool.effective_sol_reserve = pool.effective_sol_reserve.checked_add(amount_in)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        pool.effective_token_reserve = pool.effective_token_reserve.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
     } else {
-        pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
+        pool.token_reserve = pool.token_reserve.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.lamports = pool.lamports.checked_sub(amount_out)
+        pool.sol_reserve = pool.sol_reserve.checked_sub(amount_out)
+            .ok_or(error!(WhiplashError::MathUnderflow))?;
+        pool.effective_token_reserve = pool.effective_token_reserve.checked_add(amount_in)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        pool.effective_sol_reserve = pool.effective_sol_reserve.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
     }
     
@@ -186,7 +189,7 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
             user_token_in_account.mint
         },
         token_out_mint: if is_sol_to_y {
-            ctx.accounts.pool.token_y_mint
+            ctx.accounts.pool.token_mint
         } else {
             anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
         },

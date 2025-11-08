@@ -14,7 +14,7 @@ pub struct LeverageSwap<'info> {
         mut,
         seeds = [
             b"pool".as_ref(),
-            pool.token_y_mint.as_ref(),
+            pool.token_mint.as_ref(),
         ],
         bump = pool.bump,
     )]
@@ -22,11 +22,11 @@ pub struct LeverageSwap<'info> {
     
     #[account(
         mut,
-        constraint = token_y_vault.key() == pool.token_y_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.mint == pool.token_y_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
     )]
-    pub token_y_vault: Account<'info, TokenAccount>,
+    pub token_vault: Account<'info, TokenAccount>,
     
     /// CHECK: This can be either an SPL token account OR a native SOL account (user wallet)
     #[account(mut)]
@@ -78,10 +78,10 @@ pub fn handle_leverage_swap(
     
     // Validate token accounts for short positions (Token->SOL)
     if !is_sol_to_y {
-        // For Token->SOL leverage, validate that user_token_in is a token Y account
+        // For Token->SOL leverage, validate that user_token_in is a token account
         let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
-            user_token_in_account.mint == ctx.accounts.pool.token_y_mint,
+            user_token_in_account.mint == ctx.accounts.pool.token_mint,
             WhiplashError::InvalidTokenAccounts
         );
         require!(
@@ -99,21 +99,7 @@ pub fn handle_leverage_swap(
         .checked_div(10)
         .ok_or(error!(WhiplashError::MathOverflow))?;
 
-    let amount_out = if is_sol_to_y {
-        // Long (SOL → Y)
-        ctx.accounts.pool.calculate_swap_x_to_y(total_input)?
-    } else {
-        // Short (Y → SOL)
-        ctx.accounts.pool.calculate_swap_y_to_x(total_input)?
-    };
-
-    let base_amount_out = if is_sol_to_y {
-        ctx.accounts.pool.calculate_swap_x_to_y(amount_in)?
-    } else {
-        ctx.accounts.pool.calculate_swap_y_to_x(amount_in)?
-    };
-
-    let leveraged_amount_out = amount_out - base_amount_out;
+    let amount_out = ctx.accounts.pool.calculate_output(total_input, is_sol_to_y)?;
     // msg!("leveraged_amount_out: {}", leveraged_amount_out);
     
     // -----------------------------------------------------------------
@@ -121,38 +107,38 @@ pub fn handle_leverage_swap(
     // -----------------------------------------------------------------
     let pool_before = &ctx.accounts.pool;
 
-    // Total reserves before the swap
-    let total_x_before: u128 = pool_before.lamports as u128;
-    let total_y_before: u128 = pool_before.token_y_amount as u128;
+    // Effective reserves before the swap
+    let x_before: u128 = pool_before.effective_sol_reserve as u128;
+    let y_before: u128 = pool_before.effective_token_reserve as u128;
 
-    // Reserves after the swap (but before we mutate pool state)
-    let (total_x_after, total_y_after): (u128, u128) = if is_sol_to_y {
-        // Long position: user deposits SOL (amount_in) and takes Y (amount_out)
+    // Effective reserves after the swap (but before we mutate pool state)
+    let (x_after, y_after): (u128, u128) = if is_sol_to_y {
+        // Long position: adds SOL (amount_in) and takes tokens (amount_out)
         (
-            total_x_before
+            x_before
                 .checked_add(amount_in as u128)
                 .ok_or(error!(WhiplashError::MathOverflow))?,
-            total_y_before
+            y_before
                 .checked_sub(amount_out as u128)
                 .ok_or(error!(WhiplashError::MathUnderflow))?,
         )
     } else {
-        // Short position: user deposits Y (amount_in) and takes SOL (amount_out)
+        // Short position: adds tokens (amount_in) and takes SOL (amount_out)
         (
-            total_x_before
+            x_before
                 .checked_sub(amount_out as u128)
                 .ok_or(error!(WhiplashError::MathUnderflow))?,
-            total_y_before
+            y_before
                 .checked_add(amount_in as u128)
                 .ok_or(error!(WhiplashError::MathOverflow))?,
         )
     };
 
-    let k_before = total_x_before
-        .checked_mul(total_y_before)
+    let k_before = x_before
+        .checked_mul(y_before)
         .ok_or(error!(WhiplashError::MathOverflow))?;
-    let k_after = total_x_after
-        .checked_mul(total_y_after)
+    let k_after = x_after
+        .checked_mul(y_after)
         .ok_or(error!(WhiplashError::MathOverflow))?;
 
     let delta_k = k_before
@@ -192,10 +178,10 @@ pub fn handle_leverage_swap(
             ],
         )?;
     } else {
-        // Short position: Transfer token Y collateral from user to vault
+        // Short position: Transfer token collateral from user to vault
         let cpi_accounts_in = Transfer {
             from: ctx.accounts.user_token_in.to_account_info(),
-            to: ctx.accounts.token_y_vault.to_account_info(),
+            to: ctx.accounts.token_vault.to_account_info(),
             authority: ctx.accounts.user.to_account_info(),
         };
         let cpi_ctx_in = CpiContext::new(
@@ -213,47 +199,53 @@ pub fn handle_leverage_swap(
     let position = &mut ctx.accounts.position;
     position.authority = ctx.accounts.user.key();
     position.pool = ctx.accounts.pool.key();
-    position.is_long = is_sol_to_y; // long if SOL to Y, short if Y to SOL
+    position.is_long = is_sol_to_y; // long if SOL to token, short if token to SOL
     position.collateral = amount_in;
     position.leverage = leverage;
     position.size = amount_out; // Virtual claim on pool tokens
     position.delta_k = delta_k;
-    position.leveraged_token_amount = leveraged_amount_out;
     position.nonce = nonce;
     position.bump = *ctx.bumps.get("position").unwrap();
     
-    // Store the current cumulative funding rate index for this position
-    position.entry_funding_rate_index = ctx.accounts.pool.cumulative_funding_rate_index;
-    
-    // Calculate entry price (simple estimation as average price) as Q64.64 u128
-    let entry_price = ((amount_in as u128 * leverage as u128) << 64) / ((amount_out as u128) << 64);
-    position.entry_price = entry_price;
+    // Store the current cumulative funding accumulator for this position
+    position.entry_funding_accumulator = ctx.accounts.pool.cumulative_funding_accumulator;
     
     // Update pool reserves accounting
-    // Note: Tokens physically stay in the vault, but we track which are "allocated" to positions
+    // Leverage swaps only update effective reserves (not real reserves)
     let pool = &mut ctx.accounts.pool;
     if is_sol_to_y {
-        // Long position: receives SOL collateral, allocates tokens to position
-        pool.lamports = pool.lamports.checked_add(amount_in)
+        // Long position: adds collateral and takes virtual tokens
+        // Update real reserves (collateral is deposited)
+        pool.sol_reserve = pool.sol_reserve.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.token_y_amount = pool.token_y_amount.checked_sub(amount_out)
+        
+        // Update effective reserves
+        pool.effective_sol_reserve = pool.effective_sol_reserve.checked_add(amount_in)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        pool.effective_token_reserve = pool.effective_token_reserve.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
-        pool.leveraged_token_y_amount = pool.leveraged_token_y_amount.checked_add(leveraged_amount_out)
+        
+        // Add to longs delta_k pool
+        pool.total_delta_k_longs = pool.total_delta_k_longs
+            .checked_add(delta_k)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
-        // Short position: receives token collateral, allocates SOL to position
-        pool.token_y_amount = pool.token_y_amount.checked_add(amount_in)
+        // Short position: adds token collateral and takes virtual SOL
+        // Update real reserves (collateral is deposited)
+        pool.token_reserve = pool.token_reserve.checked_add(amount_in)
             .ok_or(error!(WhiplashError::MathOverflow))?;
-        pool.lamports = pool.lamports.checked_sub(amount_out)
+        
+        // Update effective reserves
+        pool.effective_token_reserve = pool.effective_token_reserve.checked_add(amount_in)
+            .ok_or(error!(WhiplashError::MathOverflow))?;
+        pool.effective_sol_reserve = pool.effective_sol_reserve.checked_sub(amount_out)
             .ok_or(error!(WhiplashError::MathUnderflow))?;
-        pool.leveraged_sol_amount = pool.leveraged_sol_amount.checked_add(leveraged_amount_out)
+        
+        // Add to shorts delta_k pool
+        pool.total_delta_k_shorts = pool.total_delta_k_shorts
+            .checked_add(delta_k)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     }
-    
-    // Update total_delta_k for the pool (tracks total leverage impact)
-    pool.total_delta_k = pool.total_delta_k
-        .checked_add(delta_k)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
     
     // Emit swap event
     emit!(Swapped {
@@ -262,10 +254,10 @@ pub fn handle_leverage_swap(
         token_in_mint: if is_sol_to_y {
             anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
         } else {
-            ctx.accounts.pool.token_y_mint
+            ctx.accounts.pool.token_mint
         },
         token_out_mint: if is_sol_to_y {
-            ctx.accounts.pool.token_y_mint
+            ctx.accounts.pool.token_mint
         } else {
             anchor_lang::solana_program::system_program::ID // Use System Program ID for SOL
         },

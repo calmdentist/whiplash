@@ -108,14 +108,17 @@ function close_position(position):
     if position.is_long:
         payout = (pool.effective_sol_reserve * effective_size - effective_delta_k) / (pool.effective_token_reserve + effective_size)
         payout_is_sol = true
-        pool.total_delta_k_longs -= position.delta_k # Remove original full debt
+        # Remove EFFECTIVE delta_k from pool tracking
+        # Funding fees reduce total_delta_k proportionally, so we subtract effective delta_k
+        pool.total_delta_k_longs -= effective_delta_k
         # Settle by swapping back effective size and receiving payout
         pool.effective_token_reserve += effective_size
         pool.effective_sol_reserve -= payout
     else:
         payout = (pool.effective_token_reserve * effective_size - effective_delta_k) / (pool.effective_sol_reserve + effective_size)
         payout_is_sol = false
-        pool.total_delta_k_shorts -= position.delta_k # Remove original full debt
+        # Remove EFFECTIVE delta_k from pool tracking
+        pool.total_delta_k_shorts -= effective_delta_k
         # Settle by swapping back effective size and receiving payout
         pool.effective_sol_reserve += effective_size
         pool.effective_token_reserve -= payout
@@ -123,7 +126,37 @@ function close_position(position):
     return payout, payout_is_sol
 
 function liquidate(position, liquidator):
-    # This function would be implemented using the same core logic as close_position,
-    # with an added check for liquidatability and a reward distribution mechanism.
-    # The settlement of the position's debt against the pool state is identical.
+    remaining_factor = pool.calculate_position_remaining_factor(position.entry_funding_accumulator)
+    effective_size = position.size * remaining_factor
+    effective_delta_k = position.delta_k * remaining_factor
+
+    # 1. Calculate the gross value of the position's effective size.
+    position_value_in_collateral = pool.calculate_output(effective_size, !position.is_long)
+
+    # 2. Calculate the net payout after repaying debt.
+    if position.is_long:
+        payout = (pool.effective_sol_reserve * effective_size - effective_delta_k) / (pool.effective_token_reserve + effective_size)
+    else:
+        payout = (pool.effective_token_reserve * effective_size - effective_delta_k) / (pool.effective_sol_reserve + effective_size)
+    
+    # 3. Check if the net payout is less than 5% of the gross value.
+    liquidation_threshold = position_value_in_collateral * 0.05
+    assert(payout <= liquidation_threshold, "Position not liquidatable")
+
+    # 4. The liquidator's reward is the entire remaining payout.
+    reward = payout
+    
+    # 5. Settle the position against the pool. This is the same logic as close_position.
+    if position.is_long:
+        pool.total_delta_k_longs -= effective_delta_k # Remove EFFECTIVE delta_k
+        pool.effective_token_reserve += effective_size
+        pool.effective_sol_reserve -= payout # The payout (reward) is removed
+        transfer_sol(reward, to=liquidator)
+    else:
+        pool.total_delta_k_shorts -= effective_delta_k # Remove EFFECTIVE delta_k
+        pool.effective_sol_reserve += effective_size
+        pool.effective_token_reserve -= payout # The payout (reward) is removed
+        transfer_token(reward, to=liquidator)
+    
+    # The position is now closed.
     return

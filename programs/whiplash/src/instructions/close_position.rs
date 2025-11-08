@@ -13,7 +13,7 @@ pub struct ClosePosition<'info> {
         mut,
         seeds = [
             b"pool".as_ref(),
-            pool.token_y_mint.as_ref(),
+            pool.token_mint.as_ref(),
         ],
         bump = pool.bump,
     )]
@@ -21,11 +21,11 @@ pub struct ClosePosition<'info> {
     
     #[account(
         mut,
-        constraint = token_y_vault.key() == pool.token_y_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.mint == pool.token_y_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_y_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
     )]
-    pub token_y_vault: Account<'info, TokenAccount>,
+    pub token_vault: Account<'info, TokenAccount>,
     
     #[account(
         mut,
@@ -61,54 +61,42 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     // -----------------------------------------------------------------
     // Calculate effective position values using amortization formula
     // f(t) = 1 - (I(t) - I(t_open))
-    // y_effective = y_original * f(t)
-    // delta_k_effective = delta_k_original * f(t)
+    // effective_size = size * f(t)
+    // effective_delta_k = delta_k * f(t)
     // -----------------------------------------------------------------
     
     let position_size_original = position.size;
     let delta_k_original: u128 = position.delta_k;
     
-    // Calculate the index difference (funding accrued)
-    const INDEX_PRECISION_BITS: u32 = 64;
-    const INDEX_PRECISION: u128 = 1u128 << INDEX_PRECISION_BITS;
+        // Use pool's method to calculate remaining factor
+        const PRECISION_BITS: u32 = 32;
+        const PRECISION: u128 = 1u128 << PRECISION_BITS;
     
-    let index_diff = pool.cumulative_funding_rate_index
-        .checked_sub(position.entry_funding_rate_index)
-        .ok_or(error!(WhiplashError::MathUnderflow))?;
+    let remaining_factor = pool.calculate_position_remaining_factor(position.entry_funding_accumulator)?;
     
-    // Calculate effective position size: y_effective = y_original * (1 - index_diff / PRECISION)
-    // Rearranged to: y_effective = y_original - (y_original * index_diff / PRECISION)
-    let position_size_reduction = (position_size_original as u128)
-        .checked_mul(index_diff)
-        .ok_or(error!(WhiplashError::MathOverflow))?
-        .checked_div(INDEX_PRECISION)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
-    
+    // Calculate effective position size: effective_size = original_size * remaining_factor / PRECISION
     let position_size_u128: u128 = (position_size_original as u128)
-        .checked_sub(position_size_reduction)
-        .ok_or(error!(WhiplashError::MathUnderflow))?;
-    
-    // Calculate effective delta_k: delta_k_effective = delta_k_original * (1 - index_diff / PRECISION)
-    // Rearranged to: delta_k_effective = delta_k_original - (delta_k_original * index_diff / PRECISION)
-    let delta_k_reduction = delta_k_original
-        .checked_mul(index_diff)
+        .checked_mul(remaining_factor)
         .ok_or(error!(WhiplashError::MathOverflow))?
-        .checked_div(INDEX_PRECISION)
+        .checked_div(PRECISION)
         .ok_or(error!(WhiplashError::MathOverflow))?;
     
+    // Calculate effective delta_k: effective_delta_k = original_delta_k * remaining_factor / PRECISION
     let delta_k: u128 = delta_k_original
-        .checked_sub(delta_k_reduction)
-        .ok_or(error!(WhiplashError::MathUnderflow))?;
+        .checked_mul(remaining_factor)
+        .ok_or(error!(WhiplashError::MathOverflow))?
+        .checked_div(PRECISION)
+        .ok_or(error!(WhiplashError::MathOverflow))?;
     
-    // Current total reserves
-    let total_x: u128 = pool.lamports as u128;
-    let total_y: u128 = pool.token_y_amount as u128;
+    // Current effective reserves
+    let x_e: u128 = pool.effective_sol_reserve as u128;
+    let y_e: u128 = pool.effective_token_reserve as u128;
 
-    // Determine payout depending on position side
+    // Determine payout depending on position side (using architecture formulas)
     let (payout_u128, is_liquidatable) = if position.is_long {
-        // Long: user returns Y tokens and gets SOL
-        // X_out = (x * y_pos - delta_k) / (y + y_pos)
-        let product_val = total_x
+        // Long: user returns tokens and gets SOL
+        // payout = (x_e * effective_size - effective_delta_k) / (y_e + effective_size)
+        let product_val = x_e
             .checked_mul(position_size_u128)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
@@ -123,7 +111,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         if numerator == 0u128 {
             (0u128, true)
         } else {
-            let denominator = total_y
+            let denominator = y_e
                 .checked_add(position_size_u128)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
             (
@@ -134,10 +122,10 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             )
         }
     } else {
-        // Short: user returns SOL (x_pos) and gets Y tokens
-        // Y_out = (x_pos * y - delta_k) / (x + x_pos)
+        // Short: user returns SOL and gets tokens
+        // payout = (y_e * effective_size - effective_delta_k) / (x_e + effective_size)
         let product_val = position_size_u128
-            .checked_mul(total_y)
+            .checked_mul(y_e)
             .ok_or(error!(WhiplashError::MathOverflow))?;
 
         let numerator = if product_val <= delta_k {
@@ -151,7 +139,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         if numerator == 0u128 {
             (0u128, true)
         } else {
-            let denominator = total_x
+            let denominator = x_e
                 .checked_add(position_size_u128)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
             (
@@ -172,12 +160,6 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
 
     let user_output: u64 = payout_u128 as u64;
     
-    // Calculate how much of the position was paid through funding fees
-    // funding_fees_paid = delta_k_original - delta_k_effective
-    let funding_fees_paid = delta_k_original
-        .checked_sub(delta_k)
-        .ok_or(error!(WhiplashError::MathUnderflow))?;
-    
     // Convert effective position sizes to u64 for pool updates
     let effective_position_size_u64 = if position_size_u128 > u64::MAX as u128 {
         return Err(error!(WhiplashError::MathOverflow));
@@ -187,37 +169,46 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     
     // Get PDA info for signing
     let pool_bump = pool.bump;
-    let pool_mint = pool.token_y_mint;
+    let pool_mint = pool.token_mint;
     
     // Handle based on position type
     // Note: Positions are virtual - tokens were never physically transferred out of the pool
     if position.is_long {
-        // LONG POSITION: User has virtual claim on Y tokens, gets SOL back
+        // LONG POSITION: User has virtual claim on tokens, gets SOL back
         
         // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
-            // Return the position's effective virtual tokens to available pool reserves
-            pool.token_y_amount = pool.token_y_amount
+            // Return the position's effective virtual tokens to effective reserves
+            pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_add(effective_position_size_u64)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
             
-            // Deduct SOL being paid to the user
-            pool.lamports = pool.lamports
+            // Deduct SOL being paid to the user from effective reserves
+            pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
             
-            // Remove leveraged amounts
-            pool.leveraged_token_y_amount -= position.leveraged_token_amount;
+            // Also deduct from real SOL reserves (actual payout)
+            pool.sol_reserve = pool.sol_reserve
+                .checked_sub(user_output)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
             
-            // Update funding fee accounting
-            // Convert unrealized fees to realized based on what was actually paid
-            pool.unrealized_funding_fees = pool.unrealized_funding_fees
-                .saturating_sub(funding_fees_paid);
+            // Remove this position's EFFECTIVE delta_k from the longs pool
+            // Funding fees reduce total_delta_k proportionally across all positions
+            // So we subtract the effective delta_k (original * remaining_factor)
+            pool.total_delta_k_longs = pool.total_delta_k_longs
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
             
-            // Remove this position's original delta_k from the total
-            pool.total_delta_k = pool.total_delta_k
-                .saturating_sub(delta_k_original);
+            // Handle rounding errors: if remaining delta_k is very small (< 0.01% of effective_k), round to zero
+            let effective_k = (pool.effective_sol_reserve as u128)
+                .checked_mul(pool.effective_token_reserve as u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            let threshold = effective_k / 10000; // 0.01% threshold
+            if pool.total_delta_k_longs < threshold {
+                pool.total_delta_k_longs = 0;
+            }
         }
         
         // 2. Transfer SOL payout to user (direct lamport transfer from pool)
@@ -232,32 +223,41 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             .checked_add(user_output)
             .ok_or(error!(WhiplashError::MathOverflow))?;
     } else {
-        // SHORT POSITION: User has virtual claim on SOL, gets Y tokens back
+        // SHORT POSITION: User has virtual claim on SOL, gets tokens back
         
         // 1. Update pool state
         {
             let pool = &mut ctx.accounts.pool;
-            // Return the position's effective virtual SOL to available pool reserves
-            pool.lamports = pool.lamports
+            // Return the position's effective virtual SOL to effective reserves
+            pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_add(effective_position_size_u64)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
                 
-            // Deduct tokens being sent to the user
-            pool.token_y_amount = pool.token_y_amount
+            // Deduct tokens being sent to the user from effective reserves
+            pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_sub(user_output)
                 .ok_or(error!(WhiplashError::MathOverflow))?;
-
-            // Remove leveraged amounts
-            pool.leveraged_sol_amount -= position.leveraged_token_amount;
             
-            // Update funding fee accounting
-            // Convert unrealized fees to realized based on what was actually paid
-            pool.unrealized_funding_fees = pool.unrealized_funding_fees
-                .saturating_sub(funding_fees_paid);
+            // Also deduct from real token reserves (actual payout)
+            pool.token_reserve = pool.token_reserve
+                .checked_sub(user_output)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
             
-            // Remove this position's original delta_k from the total
-            pool.total_delta_k = pool.total_delta_k
-                .saturating_sub(delta_k_original);
+            // Remove this position's EFFECTIVE delta_k from the shorts pool
+            // Funding fees reduce total_delta_k proportionally across all positions
+            // So we subtract the effective delta_k (original * remaining_factor)
+            pool.total_delta_k_shorts = pool.total_delta_k_shorts
+                .checked_sub(delta_k)
+                .ok_or(error!(WhiplashError::MathUnderflow))?;
+            
+            // Handle rounding errors: if remaining delta_k is very small (< 0.01% of effective_k), round to zero
+            let effective_k = (pool.effective_sol_reserve as u128)
+                .checked_mul(pool.effective_token_reserve as u128)
+                .ok_or(error!(WhiplashError::MathOverflow))?;
+            let threshold = effective_k / 10000; // 0.01% threshold
+            if pool.total_delta_k_shorts < threshold {
+                pool.total_delta_k_shorts = 0;
+            }
         }
         
         // 2. Transfer token payout to user (from vault)
@@ -272,7 +272,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
-                    from: ctx.accounts.token_y_vault.to_account_info(),
+                    from: ctx.accounts.token_vault.to_account_info(),
                     to: ctx.accounts.user_token_out.to_account_info(),
                     authority: ctx.accounts.pool.to_account_info(),
                 },
