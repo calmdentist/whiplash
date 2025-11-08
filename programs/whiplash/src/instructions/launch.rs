@@ -73,6 +73,8 @@ pub fn handle_launch(
     token_name: String,
     token_ticker: String,
     metadata_uri: String,
+    funding_constant_c: Option<u128>,
+    liquidation_divergence_threshold: Option<u128>,
 ) -> Result<()> {
     // Validate SOL amount
     require!(sol_amount > 0, WhiplashError::ZeroSwapAmount);
@@ -213,6 +215,15 @@ pub fn handle_launch(
     pool.total_delta_k_shorts = 0;
     pool.last_update_timestamp = Clock::get()?.unix_timestamp;
     pool.cumulative_funding_accumulator = 0;
+    
+    // Initialize EMA oracle fields
+    pool.ema_price = 0;
+    pool.ema_initialized = false;
+    
+    // Initialize configurable parameters with defaults if not provided
+    const PRECISION: u128 = 1u128 << 32; // Same as in Pool impl
+    pool.funding_constant_c = funding_constant_c.unwrap_or(PRECISION / 10000); // Default: 0.0001/sec
+    pool.liquidation_divergence_threshold = liquidation_divergence_threshold.unwrap_or(10); // Default: 10%
     
     // Emit the pool launched event
     emit!(PoolLaunched {

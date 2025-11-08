@@ -44,6 +44,16 @@ pub struct Pool {
     // Whether the EMA has been initialized
     pub ema_initialized: bool,
     
+    // ----- Configurable Parameters -----
+    
+    // Funding rate constant C (in fixed-point with PRECISION bits)
+    // Default: PRECISION / 10000 = 0.0001/sec
+    pub funding_constant_c: u128,
+    
+    // EMA divergence threshold for liquidation protection (percentage)
+    // Default: 10 (represents 10%)
+    pub liquidation_divergence_threshold: u128,
+    
     // Bump seed for PDA derivation
     pub bump: u8,
 }
@@ -53,10 +63,6 @@ impl Pool {
     
     // EMA half-life: 5 minutes (price moves have ~5min to prove they're real)
     pub const EMA_HALF_LIFE_SECONDS: i64 = 5 * 60;
-    
-    // Liquidation divergence threshold: 10%
-    // If spot < EMA by >10%, likely manipulation
-    pub const LIQUIDATION_DIVERGENCE_THRESHOLD: u128 = 10;
     
     // Fixed-point precision for price calculations
     const PRICE_PRECISION: u128 = 1u128 << 64; // 2^64
@@ -119,11 +125,10 @@ impl Pool {
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
         // Calculate funding rate: C * leverage_ratio_squared
-        // We'll use C = 0.0001 per second (represented in fixed-point)
-        let c_constant: u128 = PRECISION / 10000; // 0.0001 in fixed-point
+        // Use pool's configurable funding_constant_c
         
         // funding_rate = (C * leverage_ratio_squared) / PRECISION
-        let funding_rate = c_constant
+        let funding_rate = self.funding_constant_c
             .checked_mul(leverage_ratio_squared)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?
             .checked_div(PRECISION)
@@ -426,7 +431,7 @@ impl Pool {
             .checked_div(self.ema_price)
             .ok_or(error!(crate::WhiplashError::MathOverflow))?;
         
-        // Safe to liquidate if divergence is within threshold
-        Ok(divergence_percentage <= Self::LIQUIDATION_DIVERGENCE_THRESHOLD)
+        // Safe to liquidate if divergence is within pool's configured threshold
+        Ok(divergence_percentage <= self.liquidation_divergence_threshold)
     }
 } 

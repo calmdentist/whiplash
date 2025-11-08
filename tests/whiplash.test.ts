@@ -145,13 +145,15 @@ describe("whiplash", () => {
 
   it("Initializes a pool", async () => {
     try {
-      // Initialize the pool
+      // Initialize the pool with default parameters (None for both)
       const tx = await program.methods
         .launch(
           new BN(SOL_AMOUNT),
           "Test Token",
           "TEST",
-          METADATA_URI
+          METADATA_URI,
+          null, // funding_constant_c: use default (0.0001/sec)
+          null  // liquidation_divergence_threshold: use default (10%)
         )
         .accounts({
           authority: wallet.publicKey,

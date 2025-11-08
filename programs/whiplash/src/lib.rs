@@ -24,8 +24,18 @@ pub mod whiplash {
         token_name: String,
         token_ticker: String,
         metadata_uri: String,
+        funding_constant_c: Option<u128>,
+        liquidation_divergence_threshold: Option<u128>,
     ) -> Result<()> {
-        instructions::launch::handle_launch(ctx, sol_amount, token_name, token_ticker, metadata_uri)
+        instructions::launch::handle_launch(
+            ctx, 
+            sol_amount, 
+            token_name, 
+            token_ticker, 
+            metadata_uri,
+            funding_constant_c,
+            liquidation_divergence_threshold
+        )
     }
 
     pub fn swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> Result<()> {
