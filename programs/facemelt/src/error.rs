@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[error_code]
-pub enum WhiplashError {
+pub enum FacemeltError {
     #[msg("Invalid token accounts")]
     InvalidTokenAccounts,
     

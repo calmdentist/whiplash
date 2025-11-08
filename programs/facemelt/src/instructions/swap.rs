@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, FacemeltError};
 
 #[derive(Accounts)]
 pub struct Swap<'info> {
@@ -19,9 +19,9 @@ pub struct Swap<'info> {
     
     #[account(
         mut,
-        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ FacemeltError::InvalidTokenAccounts,
     )]
     pub token_vault: Account<'info, TokenAccount>,
     
@@ -45,7 +45,7 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     
     // Validate input amount
     if amount_in == 0 {
-        return Err(error!(WhiplashError::ZeroSwapAmount));
+        return Err(error!(FacemeltError::ZeroSwapAmount));
     }
     
     // Check if token in is SOL based on the owner of the account
@@ -57,28 +57,28 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         let user_token_out_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_out)?;
         require!(
             user_token_out_account.mint == ctx.accounts.pool.token_mint,
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
         require!(
             user_token_out_account.owner == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
     } else {
         // For token to SOL, we need to verify user_token_in is a token account
         let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
             user_token_in_account.mint == ctx.accounts.pool.token_mint,
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
         require!(
             user_token_in_account.owner == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
         // For a token to SOL swap, we need to verify the user_token_out is the user's wallet for receiving SOL
         // For a SOL output, the account must be a system account (wallet)
         require!(
             ctx.accounts.user_token_out.key() == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
     }
     
@@ -88,7 +88,7 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     let amount_out = ctx.accounts.pool.calculate_output(amount_in, is_sol_to_y)?;
     
     // Check minimum output amount
-    require!(amount_out >= min_amount_out, WhiplashError::SlippageToleranceExceeded);
+    require!(amount_out >= min_amount_out, FacemeltError::SlippageToleranceExceeded);
     
     // Handle token transfers
     if is_sol_to_y {
@@ -146,9 +146,9 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
         
         // Calculate new lamport values
         let new_pool_lamports = pool_lamports.checked_sub(amount_out)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+            .ok_or(error!(crate::FacemeltError::MathOverflow))?;
         let new_user_lamports = user_lamports.checked_add(amount_out)
-            .ok_or(error!(crate::WhiplashError::MathOverflow))?;
+            .ok_or(error!(crate::FacemeltError::MathOverflow))?;
         
         // Update lamports
         **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = new_pool_lamports;
@@ -160,22 +160,22 @@ pub fn handle_swap(ctx: Context<Swap>, amount_in: u64, min_amount_out: u64) -> R
     let pool = &mut ctx.accounts.pool;
     if is_sol_to_y {
         pool.sol_reserve = pool.sol_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.token_reserve = pool.token_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
         pool.effective_sol_reserve = pool.effective_sol_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.effective_token_reserve = pool.effective_token_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
     } else {
         pool.token_reserve = pool.token_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.sol_reserve = pool.sol_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
         pool.effective_token_reserve = pool.effective_token_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.effective_sol_reserve = pool.effective_sol_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
     }
     
     // Emit swap event

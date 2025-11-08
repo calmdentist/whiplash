@@ -15,7 +15,7 @@ pub use utils::*;
 declare_id!("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
 
 #[program]
-pub mod whiplash {
+pub mod facemelt {
     use super::*;
 
     pub fn launch(

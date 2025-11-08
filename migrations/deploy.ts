@@ -68,39 +68,39 @@ async function main() {
     // }
     // console.log("Metaplex program deployment verified");
 
-    // Deploy Whiplash program
-    console.log("Deploying Whiplash program...");
+    // Deploy Facemelt program
+    console.log("Deploying Facemelt program...");
     execSync('anchor deploy', { stdio: 'inherit' });
-    console.log("Whiplash program deployed successfully!");
+    console.log("Facemelt program deployed successfully!");
 
     // Wait for deployment to be confirmed
-    console.log("Waiting for Whiplash program deployment to be confirmed...");
+    console.log("Waiting for Facemelt program deployment to be confirmed...");
     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
 
-    // Verify Whiplash program is deployed
-    const whiplashProgramId = new PublicKey("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
-    const whiplashProgramInfo = await provider.connection.getAccountInfo(whiplashProgramId);
-    if (!whiplashProgramInfo || !whiplashProgramInfo.executable) {
-      throw new Error("Whiplash program is not deployed or not executable");
+    // Verify Facemelt program is deployed
+    const facemeltProgramId = new PublicKey("DjSx4kWjgjUQ2QDjYcfJooCNhisSC2Rk3uzGkK9fJRbb");
+    const facemeltProgramInfo = await provider.connection.getAccountInfo(facemeltProgramId);
+    if (!facemeltProgramInfo || !facemeltProgramInfo.executable) {
+      throw new Error("Facemelt program is not deployed or not executable");
     }
-    console.log("Whiplash program deployment verified");
+    console.log("Facemelt program deployment verified");
 
-    // Initialize Whiplash program client
-    console.log("Initializing Whiplash program client...");
+    // Initialize Facemelt program client
+    console.log("Initializing Facemelt program client...");
     
     // Load the IDL
-    const idlPath = path.join(__dirname, "../target/idl/whiplash.json");
+    const idlPath = path.join(__dirname, "../target/idl/facemelt.json");
     if (!fs.existsSync(idlPath)) {
       throw new Error(`IDL file not found at ${idlPath}`);
     }
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
     
-    const whiplashProgram = new Program(
+    const facemeltProgram = new Program(
       idl,
-      whiplashProgramId,
+      facemeltProgramId,
       provider
     );
-    console.log("Whiplash program client initialized");
+    console.log("Facemelt program client initialized");
 
     // Launch SHIB token
     console.log("Launching SHIB token...");
@@ -116,7 +116,7 @@ async function main() {
     // Find pool PDA
     const [poolPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("pool"), tokenMint.publicKey.toBuffer()],
-      whiplashProgramId
+      facemeltProgramId
     );
     console.log("Pool PDA:", poolPda.toString());
 
@@ -142,7 +142,7 @@ async function main() {
     );
     console.log("Metadata PDA:", metadataPda.toString());
 
-    const tx = await whiplashProgram.methods
+    const tx = await facemeltProgram.methods
       .launch(
         virtualSolReserve,
         tokenName,

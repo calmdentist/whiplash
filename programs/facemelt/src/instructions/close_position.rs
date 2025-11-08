@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
 };
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, FacemeltError};
 
 #[derive(Accounts)]
 pub struct ClosePosition<'info> {
@@ -21,9 +21,9 @@ pub struct ClosePosition<'info> {
     
     #[account(
         mut,
-        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ FacemeltError::InvalidTokenAccounts,
     )]
     pub token_vault: Account<'info, TokenAccount>,
     
@@ -37,8 +37,8 @@ pub struct ClosePosition<'info> {
         ],
         bump,
         close = user,
-        constraint = position.authority == user.key() @ WhiplashError::InvalidPosition,
-        constraint = position.pool == pool.key() @ WhiplashError::InvalidPosition,
+        constraint = position.authority == user.key() @ FacemeltError::InvalidPosition,
+        constraint = position.pool == pool.key() @ FacemeltError::InvalidPosition,
     )]
     pub position: Account<'info, Position>,
     
@@ -77,16 +77,16 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
     // Calculate effective position size: effective_size = original_size * remaining_factor / PRECISION
     let position_size_u128: u128 = (position_size_original as u128)
         .checked_mul(remaining_factor)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(PRECISION)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
     
     // Calculate effective delta_k: effective_delta_k = original_delta_k * remaining_factor / PRECISION
     let delta_k: u128 = delta_k_original
         .checked_mul(remaining_factor)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(PRECISION)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
     
     // Current effective reserves
     let x_e: u128 = pool.effective_sol_reserve as u128;
@@ -98,14 +98,14 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         // payout = (x_e * effective_size - effective_delta_k) / (y_e + effective_size)
         let product_val = x_e
             .checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
 
         let numerator = if product_val <= delta_k {
             0u128
         } else {
             product_val
                 .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?
+                .ok_or(error!(FacemeltError::MathOverflow))?
         };
 
         if numerator == 0u128 {
@@ -113,11 +113,11 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         } else {
             let denominator = y_e
                 .checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             (
                 numerator
                     .checked_div(denominator)
-                    .ok_or(error!(WhiplashError::MathOverflow))?,
+                    .ok_or(error!(FacemeltError::MathOverflow))?,
                 false,
             )
         }
@@ -126,14 +126,14 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         // payout = (y_e * effective_size - effective_delta_k) / (x_e + effective_size)
         let product_val = position_size_u128
             .checked_mul(y_e)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
 
         let numerator = if product_val <= delta_k {
             0u128
         } else {
             product_val
                 .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathOverflow))?
+                .ok_or(error!(FacemeltError::MathOverflow))?
         };
 
         if numerator == 0u128 {
@@ -141,28 +141,28 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         } else {
             let denominator = x_e
                 .checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             (
                 numerator
                     .checked_div(denominator)
-                    .ok_or(error!(WhiplashError::MathOverflow))?,
+                    .ok_or(error!(FacemeltError::MathOverflow))?,
                 false,
             )
         }
     };
 
     // If payout is zero, the position should be liquidated instead of closed
-    require!(!is_liquidatable && payout_u128 > 0, WhiplashError::PositionNotClosable);
+    require!(!is_liquidatable && payout_u128 > 0, FacemeltError::PositionNotClosable);
 
     if payout_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
+        return Err(error!(FacemeltError::MathOverflow));
     }
 
     let user_output: u64 = payout_u128 as u64;
     
     // Convert effective position sizes to u64 for pool updates
     let effective_position_size_u64 = if position_size_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
+        return Err(error!(FacemeltError::MathOverflow));
     } else {
         position_size_u128 as u64
     };
@@ -182,29 +182,29 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             // Return the position's effective virtual tokens to effective reserves
             pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_add(effective_position_size_u64)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Deduct SOL being paid to the user from effective reserves
             pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Also deduct from real SOL reserves (actual payout)
             pool.sol_reserve = pool.sol_reserve
                 .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Remove this position's EFFECTIVE delta_k from the longs pool
             // Funding fees reduce total_delta_k proportionally across all positions
             // So we subtract the effective delta_k (original * remaining_factor)
             pool.total_delta_k_longs = pool.total_delta_k_longs
                 .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Handle rounding errors: if remaining delta_k is very small (< 0.01% of effective_k), round to zero
             let effective_k = (pool.effective_sol_reserve as u128)
                 .checked_mul(pool.effective_token_reserve as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             let threshold = effective_k / 10000; // 0.01% threshold
             if pool.total_delta_k_longs < threshold {
                 pool.total_delta_k_longs = 0;
@@ -217,11 +217,11 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         
         **source_account_info.try_borrow_mut_lamports()? = source_account_info.lamports()
             .checked_sub(user_output)
-            .ok_or(error!(WhiplashError::InsufficientFunds))?;
+            .ok_or(error!(FacemeltError::InsufficientFunds))?;
             
         **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? = dest_starting_lamports
             .checked_add(user_output)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
     } else {
         // SHORT POSITION: User has virtual claim on SOL, gets tokens back
         
@@ -231,29 +231,29 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
             // Return the position's effective virtual SOL to effective reserves
             pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_add(effective_position_size_u64)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
                 
             // Deduct tokens being sent to the user from effective reserves
             pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Also deduct from real token reserves (actual payout)
             pool.token_reserve = pool.token_reserve
                 .checked_sub(user_output)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Remove this position's EFFECTIVE delta_k from the shorts pool
             // Funding fees reduce total_delta_k proportionally across all positions
             // So we subtract the effective delta_k (original * remaining_factor)
             pool.total_delta_k_shorts = pool.total_delta_k_shorts
                 .checked_sub(delta_k)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Handle rounding errors: if remaining delta_k is very small (< 0.01% of effective_k), round to zero
             let effective_k = (pool.effective_sol_reserve as u128)
                 .checked_mul(pool.effective_token_reserve as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             let threshold = effective_k / 10000; // 0.01% threshold
             if pool.total_delta_k_shorts < threshold {
                 pool.total_delta_k_shorts = 0;

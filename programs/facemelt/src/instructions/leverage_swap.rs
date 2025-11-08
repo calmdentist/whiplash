@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
 };
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, FacemeltError};
 
 #[derive(Accounts)]
 #[instruction(amount_in: u64, min_amount_out: u64, leverage: u32, nonce: u64)]
@@ -22,9 +22,9 @@ pub struct LeverageSwap<'info> {
     
     #[account(
         mut,
-        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ FacemeltError::InvalidTokenAccounts,
     )]
     pub token_vault: Account<'info, TokenAccount>,
     
@@ -63,13 +63,13 @@ pub fn handle_leverage_swap(
     
     // Validate input amount
     if amount_in == 0 {
-        return Err(error!(WhiplashError::ZeroSwapAmount));
+        return Err(error!(FacemeltError::ZeroSwapAmount));
     }
 
     // Validate leverage (max 10x = 100)
     require!(
         leverage >= 10 && leverage <= 100,
-        WhiplashError::InvalidLeverage
+        FacemeltError::InvalidLeverage
     );
     
     // Check if token in is SOL based on the owner of the account
@@ -82,11 +82,11 @@ pub fn handle_leverage_swap(
         let user_token_in_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_token_in)?;
         require!(
             user_token_in_account.mint == ctx.accounts.pool.token_mint,
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
         require!(
             user_token_in_account.owner == ctx.accounts.user.key(),
-            WhiplashError::InvalidTokenAccounts
+            FacemeltError::InvalidTokenAccounts
         );
     }
     
@@ -95,9 +95,9 @@ pub fn handle_leverage_swap(
     // -----------------------------------------------------------------
     let total_input = amount_in
         .checked_mul(leverage as u64)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(10)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
 
     let amount_out = ctx.accounts.pool.calculate_output(total_input, is_sol_to_y)?;
     // msg!("leveraged_amount_out: {}", leveraged_amount_out);
@@ -117,49 +117,49 @@ pub fn handle_leverage_swap(
         (
             x_before
                 .checked_add(amount_in as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?,
+                .ok_or(error!(FacemeltError::MathOverflow))?,
             y_before
                 .checked_sub(amount_out as u128)
-                .ok_or(error!(WhiplashError::MathUnderflow))?,
+                .ok_or(error!(FacemeltError::MathUnderflow))?,
         )
     } else {
         // Short position: adds tokens (amount_in) and takes SOL (amount_out)
         (
             x_before
                 .checked_sub(amount_out as u128)
-                .ok_or(error!(WhiplashError::MathUnderflow))?,
+                .ok_or(error!(FacemeltError::MathUnderflow))?,
             y_before
                 .checked_add(amount_in as u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?,
+                .ok_or(error!(FacemeltError::MathOverflow))?,
         )
     };
 
     let k_before = x_before
         .checked_mul(y_before)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
     let k_after = x_after
         .checked_mul(y_after)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
 
     let delta_k = k_before
         .checked_sub(k_after)
-        .ok_or(error!(WhiplashError::MathUnderflow))?;
+        .ok_or(error!(FacemeltError::MathUnderflow))?;
     
     // // Validate delta_k is at most 10% of current k
     // let max_delta_k = k_before
     //     .checked_mul(10)
-    //     .ok_or(error!(WhiplashError::MathOverflow))?
+    //     .ok_or(error!(FacemeltError::MathOverflow))?
     //     .checked_div(100)
-    //     .ok_or(error!(WhiplashError::MathOverflow))?;
+    //     .ok_or(error!(FacemeltError::MathOverflow))?;
     // require!(
     //     delta_k <= max_delta_k,
-    //     WhiplashError::DeltaKOverload
+    //     FacemeltError::DeltaKOverload
     // );
     
     // Check minimum output amount
     require!(
         amount_out >= min_amount_out,
-        WhiplashError::SlippageToleranceExceeded
+        FacemeltError::SlippageToleranceExceeded
     );
     
     // Handle collateral transfer from user to pool
@@ -217,34 +217,34 @@ pub fn handle_leverage_swap(
         // Long position: adds collateral and takes virtual tokens
         // Update real reserves (collateral is deposited)
         pool.sol_reserve = pool.sol_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         
         // Update effective reserves
         pool.effective_sol_reserve = pool.effective_sol_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.effective_token_reserve = pool.effective_token_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
         
         // Add to longs delta_k pool
         pool.total_delta_k_longs = pool.total_delta_k_longs
             .checked_add(delta_k)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
     } else {
         // Short position: adds token collateral and takes virtual SOL
         // Update real reserves (collateral is deposited)
         pool.token_reserve = pool.token_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         
         // Update effective reserves
         pool.effective_token_reserve = pool.effective_token_reserve.checked_add(amount_in)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         pool.effective_sol_reserve = pool.effective_sol_reserve.checked_sub(amount_out)
-            .ok_or(error!(WhiplashError::MathUnderflow))?;
+            .ok_or(error!(FacemeltError::MathUnderflow))?;
         
         // Add to shorts delta_k pool
         pool.total_delta_k_shorts = pool.total_delta_k_shorts
             .checked_add(delta_k)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
     }
     
     // Emit swap event

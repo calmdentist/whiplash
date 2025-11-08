@@ -1,11 +1,11 @@
-# Whiplash 🚀
+# Facemelt 🚀
 
 An elegant AMM for maximal degeneracy - unifying spot and leverage trading from day zero, with zero seed capital required to launch.
 
 ## Overview
 
-Whiplash is a novel Automated Market Maker (AMM) tailored for memecoin trading by combining spot and leverage trading capabilities from launch. It 
-features an inbuilt launchpad that allows for the creation of tokens with zero seed capital, tradeable with leverage from day zero. Whiplash is pioneering, a modified constant-product AMM design that enables leverage without the need for actual lending/borrowing, while ensuring the pool is always solvent.
+Facemelt is a novel Automated Market Maker (AMM) tailored for memecoin trading by combining spot and leverage trading capabilities from launch. It 
+features an inbuilt launchpad that allows for the creation of tokens with zero seed capital, tradeable with leverage from day zero. Facemelt is pioneering, a modified constant-product AMM design that enables leverage without the need for actual lending/borrowing, while ensuring the pool is always solvent.
 
 ## Key Features
 
@@ -52,7 +52,7 @@ features an inbuilt launchpad that allows for the creation of tokens with zero s
 ### Installation
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/whiplash.git
+git clone https://github.com/yourusername/facemelt.git
 
 # Build the program
 anchor build
@@ -61,7 +61,7 @@ anchor build
 anchor test
 
 # Start local validator with metaplex program (dependency)
-solana-test-validator --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s ~/Desktop/whiplash/tests/metaplex_token_metadata_program.so --url https://api.mainnet-beta.solana.com --reset
+solana-test-validator --bpf-program metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s ~/Desktop/facemelt/tests/metaplex_token_metadata_program.so --url https://api.mainnet-beta.solana.com --reset
 
 # Set up local environment
 anchor run deploy

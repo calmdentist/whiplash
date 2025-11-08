@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::{
     token::{self, Token, TokenAccount, Transfer},
 };
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, FacemeltError};
 
 #[derive(Accounts)]
 pub struct Liquidate<'info> {
@@ -25,9 +25,9 @@ pub struct Liquidate<'info> {
     
     #[account(
         mut,
-        constraint = token_vault.key() == pool.token_vault @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.mint == pool.token_mint @ WhiplashError::InvalidTokenAccounts,
-        constraint = token_vault.owner == pool.key() @ WhiplashError::InvalidTokenAccounts,
+        constraint = token_vault.key() == pool.token_vault @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.mint == pool.token_mint @ FacemeltError::InvalidTokenAccounts,
+        constraint = token_vault.owner == pool.key() @ FacemeltError::InvalidTokenAccounts,
     )]
     pub token_vault: Account<'info, TokenAccount>,
     
@@ -41,8 +41,8 @@ pub struct Liquidate<'info> {
         ],
         bump,
         close = liquidator,
-        constraint = position.authority == position_owner.key() @ WhiplashError::InvalidPosition,
-        constraint = position.pool == pool.key() @ WhiplashError::InvalidPosition,
+        constraint = position.authority == position_owner.key() @ FacemeltError::InvalidPosition,
+        constraint = position.pool == pool.key() @ FacemeltError::InvalidPosition,
     )]
     pub position: Account<'info, Position>,
     
@@ -64,7 +64,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let price_safe = ctx.accounts.pool.check_liquidation_price_safety()?;
     require!(
         price_safe,
-        WhiplashError::LiquidationPriceManipulation
+        FacemeltError::LiquidationPriceManipulation
     );
     
     let position = &ctx.accounts.position;
@@ -89,16 +89,16 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     // Calculate effective position size: effective_size = original_size * remaining_factor / PRECISION
     let effective_size_u128: u128 = (position_size_original as u128)
         .checked_mul(remaining_factor)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(PRECISION)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
     
     // Calculate effective delta_k: effective_delta_k = original_delta_k * remaining_factor / PRECISION
     let effective_delta_k: u128 = delta_k_original
         .checked_mul(remaining_factor)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(PRECISION)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
 
     // Current effective reserves
     let x_e: u128 = pool.effective_sol_reserve as u128;
@@ -106,7 +106,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
 
     // Convert effective_size to u64 for calculate_output
     let effective_size_u64 = if effective_size_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
+        return Err(error!(FacemeltError::MathOverflow));
     } else {
         effective_size_u128 as u64
     };
@@ -124,58 +124,58 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         // payout = (x_e * effective_size - effective_delta_k) / (y_e + effective_size)
         let product_val = x_e
             .checked_mul(effective_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
 
         if product_val <= effective_delta_k {
             // Underwater: closing would require taking from pool (bad debt)
             // Don't liquidate - let funding fees amortize the position to zero
-            return Err(error!(WhiplashError::PositionNotLiquidatable));
+            return Err(error!(FacemeltError::PositionNotLiquidatable));
         }
         
         let numerator = product_val
             .checked_sub(effective_delta_k)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         let denominator = y_e
             .checked_add(effective_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         numerator
             .checked_div(denominator)
-            .ok_or(error!(WhiplashError::MathOverflow))?
+            .ok_or(error!(FacemeltError::MathOverflow))?
     } else {
         // Short: returns SOL and gets tokens
         // payout = (y_e * effective_size - effective_delta_k) / (x_e + effective_size)
         let product_val = effective_size_u128
             .checked_mul(y_e)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
 
         if product_val <= effective_delta_k {
             // Underwater: closing would require taking from pool (bad debt)
             // Don't liquidate - let funding fees amortize the position to zero
-            return Err(error!(WhiplashError::PositionNotLiquidatable));
+            return Err(error!(FacemeltError::PositionNotLiquidatable));
         }
         
         let numerator = product_val
             .checked_sub(effective_delta_k)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         let denominator = x_e
             .checked_add(effective_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?;
+            .ok_or(error!(FacemeltError::MathOverflow))?;
         numerator
             .checked_div(denominator)
-            .ok_or(error!(WhiplashError::MathOverflow))?
+            .ok_or(error!(FacemeltError::MathOverflow))?
     };
 
     // 3. Check if the net payout is AT MOST 5% of the gross value
     // Position is liquidatable when: payout <= 5% of position_value
     let liquidation_threshold = position_value_in_collateral
         .checked_mul(5)
-        .ok_or(error!(WhiplashError::MathOverflow))?
+        .ok_or(error!(FacemeltError::MathOverflow))?
         .checked_div(100)
-        .ok_or(error!(WhiplashError::MathOverflow))?;
+        .ok_or(error!(FacemeltError::MathOverflow))?;
 
     require!(
         payout_u128 <= liquidation_threshold,
-        WhiplashError::PositionNotLiquidatable
+        FacemeltError::PositionNotLiquidatable
     );
 
     // -----------------------------------------------------------------
@@ -184,7 +184,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
 
     // 4. The liquidator's reward is the entire remaining payout
     let liquidator_reward = if payout_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
+        return Err(error!(FacemeltError::MathOverflow));
     } else {
         payout_u128 as u64
     };
@@ -205,24 +205,24 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             // Return the position's effective virtual tokens to effective reserves
             pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_add(effective_size_u64)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
             
             // Deduct liquidator reward (SOL) from effective reserves
             pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Also deduct from real SOL reserves (actual payout)
             pool.sol_reserve = pool.sol_reserve
                 .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Remove this position's EFFECTIVE delta_k from the longs pool
             // Funding fees reduce total_delta_k proportionally across all positions
             // So we subtract the effective delta_k (original * remaining_factor)
             pool.total_delta_k_longs = pool.total_delta_k_longs
                 .checked_sub(effective_delta_k)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
         }
         
         // Transfer liquidator reward (SOL from pool to liquidator)
@@ -232,11 +232,11 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             
             **ctx.accounts.pool.to_account_info().try_borrow_mut_lamports()? = pool_lamports
                 .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
                 
             **ctx.accounts.liquidator_reward_account.to_account_info().try_borrow_mut_lamports()? = liquidator_lamports
                 .checked_add(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
         }
     } else {
         // SHORT POSITION LIQUIDATION
@@ -248,24 +248,24 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
             // Return the position's effective virtual SOL to effective reserves
             pool.effective_sol_reserve = pool.effective_sol_reserve
                 .checked_add(effective_size_u64)
-                .ok_or(error!(WhiplashError::MathOverflow))?;
+                .ok_or(error!(FacemeltError::MathOverflow))?;
                 
             // Deduct liquidator reward (tokens) from effective reserves
             pool.effective_token_reserve = pool.effective_token_reserve
                 .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Also deduct from real token reserves (actual payout)
             pool.token_reserve = pool.token_reserve
                 .checked_sub(liquidator_reward)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
             
             // Remove this position's EFFECTIVE delta_k from the shorts pool
             // Funding fees reduce total_delta_k proportionally across all positions
             // So we subtract the effective delta_k (original * remaining_factor)
             pool.total_delta_k_shorts = pool.total_delta_k_shorts
                 .checked_sub(effective_delta_k)
-                .ok_or(error!(WhiplashError::MathUnderflow))?;
+                .ok_or(error!(FacemeltError::MathUnderflow))?;
         }
         
         // Transfer liquidator reward (tokens from vault to liquidator)

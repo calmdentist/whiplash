@@ -8,7 +8,7 @@ use mpl_token_metadata::{
     instruction as mpl_instruction,
     state::Creator,
 };
-use crate::{state::*, events::*, WhiplashError};
+use crate::{state::*, events::*, FacemeltError};
 
 #[derive(Accounts)]
 #[instruction(sol_amount: u64, token_name: String, token_ticker: String, metadata_uri: String)]
@@ -77,7 +77,7 @@ pub fn handle_launch(
     liquidation_divergence_threshold: Option<u128>,
 ) -> Result<()> {
     // Validate SOL amount
-    require!(sol_amount > 0, WhiplashError::ZeroSwapAmount);
+    require!(sol_amount > 0, FacemeltError::ZeroSwapAmount);
     
     // Transfer SOL from authority to pool
     let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
@@ -116,7 +116,7 @@ pub fn handle_launch(
     );
     anchor_spl::token::mint_to(cpi_ctx, total_supply).map_err(|e| {
         msg!("Token minting error: {:?}", e);
-        error!(WhiplashError::InvalidMintAuthority)
+        error!(FacemeltError::InvalidMintAuthority)
     })?;
 
     // Create metadata with minimal allocations
@@ -163,7 +163,7 @@ pub fn handle_launch(
         ],
     ).map_err(|e| {
         msg!("Metadata creation error: {:?}", e);
-        error!(WhiplashError::MetadataCreationFailed)
+        error!(FacemeltError::MetadataCreationFailed)
     })?;
     
     // Disable mint authority with proper error handling
@@ -181,7 +181,7 @@ pub fn handle_launch(
         None,
     ).map_err(|e| {
         msg!("Mint authority change error: {:?}", e);
-        error!(WhiplashError::AuthorityChangeFailed)
+        error!(FacemeltError::AuthorityChangeFailed)
     })?;
     
     // Disable freeze authority with proper error handling
@@ -199,7 +199,7 @@ pub fn handle_launch(
         None,
     ).map_err(|e| {
         msg!("Freeze authority change error: {:?}", e);
-        error!(WhiplashError::AuthorityChangeFailed)
+        error!(FacemeltError::AuthorityChangeFailed)
     })?;
     
     // Update pool state with proper overflow checks

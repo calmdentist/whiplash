@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use crate::WhiplashError;
+use crate::FacemeltError;
 
 
 pub fn calculate_position_expected_output(
@@ -18,23 +18,23 @@ pub fn calculate_position_expected_output(
         // Long position: holding tokens, need to calculate Token->SOL swap
         // Formula: (x * y_position) / (y + y_position)
         (x_u128.checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?)
+            .ok_or(error!(FacemeltError::MathOverflow))?)
             .checked_div(y_u128.checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?)
-            .ok_or(error!(WhiplashError::MathOverflow))?
+                .ok_or(error!(FacemeltError::MathOverflow))?)
+            .ok_or(error!(FacemeltError::MathOverflow))?
     } else {
         // Short position: holding SOL, need to calculate SOL->Token swap
         // Formula: (y * x_position) / (x + x_position)
         (y_u128.checked_mul(position_size_u128)
-            .ok_or(error!(WhiplashError::MathOverflow))?)
+            .ok_or(error!(FacemeltError::MathOverflow))?)
             .checked_div(x_u128.checked_add(position_size_u128)
-                .ok_or(error!(WhiplashError::MathOverflow))?)
-            .ok_or(error!(WhiplashError::MathOverflow))?
+                .ok_or(error!(FacemeltError::MathOverflow))?)
+            .ok_or(error!(FacemeltError::MathOverflow))?
     };
 
     // Ensure the result fits in u64
     if expected_output_u128 > u64::MAX as u128 {
-        return Err(error!(WhiplashError::MathOverflow));
+        return Err(error!(FacemeltError::MathOverflow));
     }
 
     // Return the result directly without any adjustment, letting the

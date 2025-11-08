@@ -26,10 +26,10 @@
 % --- hidelinks MUST be the last package loaded ---
 \usepackage[hidelinks]{hyperref}
 
-\title{\textbf{Whiplash: A Novel AMM for Unified Spot and Leverage Trading}}
+\title{\textbf{Facemelt: A Novel AMM for Unified Spot and Leverage Trading}}
 \author{
     calmxbt\\
-    \href{https://github.com/calmdentist/whiplash}{https://github.com/calmdentist/whiplash}
+    \href{https://github.com/calmdentist/facemelt}{https://github.com/calmdentist/facemelt}
 }
 \date{June 2025}
 
@@ -38,7 +38,7 @@
 \maketitle
 
 \begin{abstract}
-This whitepaper introduces \emph{Whiplash}, a novel automated market maker (AMM) that allows both spot and leverage trading within a unified liquidity framework for long-tail assets. By employing the Uniswap V2 style invariant with modifications to accommodate leveraged positions, Whiplash enables a rich trading experience while ensuring the underlying AMM remains solvent at all times. Whiplash also allows for asset creation without seed capital for assets that meet certain criteria. We describe the mathematical foundation - operational mechanics for opening and closing leveraged positions and liquidations.
+This whitepaper introduces \emph{Facemelt}, a novel automated market maker (AMM) that allows both spot and leverage trading within a unified liquidity framework for long-tail assets. By employing the Uniswap V2 style invariant with modifications to accommodate leveraged positions, Facemelt enables a rich trading experience while ensuring the underlying AMM remains solvent at all times. Facemelt also allows for asset creation without seed capital for assets that meet certain criteria. We describe the mathematical foundation - operational mechanics for opening and closing leveraged positions and liquidations.
 \end{abstract}
 
 \section{Introduction}
@@ -51,11 +51,11 @@ Existing perpetual DEXs are based on the vAMM model, which resembles traditional
     \item Oracles: Oracles are used to fetch spot prices from external sources. This assumes trust and creates attack vectors.
 \end{itemize}
 
-Whiplash unifies spot and leverage trading within a single liquidity pool - providing deeper liquidity, reducing counterparty risk, and eliminating the need for oracles.
+Facemelt unifies spot and leverage trading within a single liquidity pool - providing deeper liquidity, reducing counterparty risk, and eliminating the need for oracles.
 
 \section{Mathematical Foundation}
 
-At its core, Whiplash uses a constant product invariant. However, to support a unified market for spot and leverage trading, it introduces the critical concepts of \textbf{real reserves} and \textbf{effective reserves}.
+At its core, Facemelt uses a constant product invariant. However, to support a unified market for spot and leverage trading, it introduces the critical concepts of \textbf{real reserves} and \textbf{effective reserves}.
 
 \begin{itemize}
     \item \textbf{Real Reserves ($x_r, y_r$)}: The actual amount of SOL and tokens held in the protocol's vaults. These are only ever changed by spot traders depositing or withdrawing assets.
@@ -81,7 +81,7 @@ x_e \cdot y_e = k_e
 
 \section{Leverage Trading Mechanism}
 
-Similarly to traditional derivative contracts, leveraged positions on Whiplash are virtual claims on pool value rather than physical token ownership.
+Similarly to traditional derivative contracts, leveraged positions on Facemelt are virtual claims on pool value rather than physical token ownership.
 
 \subsection{Opening a Leveraged Position}
 A leveraged position is created by swapping a notional amount (collateral $\times$ leverage) against the AMM's effective liquidity. The collateral is always denominated in the input asset of the swap, and the position's virtual size is denominated in the output asset.
@@ -112,7 +112,7 @@ This $\Delta k$ value is stored with the position and represents the liquidity b
 \end{enumerate}
 
 \section{Global LP Funding Rate}
-To compensate liquidity providers for the borrowed liquidity, Whiplash implements a global funding rate that continuously repays the outstanding $\Delta k$ debt, realizing it as an increase in the pool's effective reserves. This mechanism is designed to increase quadratically with total leverage, creating a strong economic incentive to maintain a healthy pool state.
+To compensate liquidity providers for the borrowed liquidity, Facemelt implements a global funding rate that continuously repays the outstanding $\Delta k$ debt, realizing it as an increase in the pool's effective reserves. This mechanism is designed to increase quadratically with total leverage, creating a strong economic incentive to maintain a healthy pool state.
 
 \subsection{Funding Rate Formula}
 The funding rate is a function of the total borrowed liquidity relative to the pool's current effective liquidity.
@@ -186,7 +186,7 @@ Upon closing, the position's original $\Delta k$ is removed from its respective 
 
 \section{Liquidation Mechanism}
 
-A position becomes liquidatable when its payout is less than or equal to 5\% of its gross value. However, to prevent manipulation-based liquidations, Whiplash employs an \textbf{EMA Price Oracle} that blocks liquidations when rapid price movements are detected.
+A position becomes liquidatable when its payout is less than or equal to 5\% of its gross value. However, to prevent manipulation-based liquidations, Facemelt employs an \textbf{EMA Price Oracle} that blocks liquidations when rapid price movements are detected.
 
 \subsection{EMA Oracle Protection}
 
@@ -214,11 +214,11 @@ A position enters "limbo" when it meets the liquidation condition but no liquida
 
 \section{Liquidity Provisioning and Launching}
 
-Whiplash enables permissionless token launches with zero seed capital, using a bonding curve model similar to pump.fun. Traders who buy the token on the bonding curve essentially fund the LP once the token reaches the bonding threshold and graduates to the AMM.
+Facemelt enables permissionless token launches with zero seed capital, using a bonding curve model similar to pump.fun. Traders who buy the token on the bonding curve essentially fund the LP once the token reaches the bonding threshold and graduates to the AMM.
 
 \section{System Properties}
 
-Whiplash's design provides several important properties:
+Facemelt's design provides several important properties:
 
 \subsection{Solvency}
 
@@ -239,7 +239,7 @@ The quadratic funding rate and effective reserve model create powerful incentive
 
 \section{Considerations and Future Work}
 
-Whiplash makes the tradeoff of temporarily reducing effective liquidity for traders in order to power leverage. This liquidity is restored through the LP funding rate and settled when positions are closed or liquidated. This tradeoff was chosen because in order to not reduce effective liquidity for traders, solvency would not be guaranteed in extreme cases (bank runs).
+Facemelt makes the tradeoff of temporarily reducing effective liquidity for traders in order to power leverage. This liquidity is restored through the LP funding rate and settled when positions are closed or liquidated. This tradeoff was chosen because in order to not reduce effective liquidity for traders, solvency would not be guaranteed in extreme cases (bank runs).
 \\\\
 However, if liquidations were integrated at the protocol level (i.e. swaps liquidate positions that would become underwater), effective liquidity could remain constant. This is an ideal scenario - designing such a liquidation mechanism that can stay within the limits of compute usage in smart contracts is very difficult, if possible.
 \\\\

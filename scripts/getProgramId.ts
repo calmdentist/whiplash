@@ -2,7 +2,7 @@
 import * as fs from 'fs';
 import * as anchor from '@coral-xyz/anchor';
 
-const keypairPath = './target/deploy/whiplash-keypair.json';
+const keypairPath = './target/deploy/facemelt-keypair.json';
 
 async function getProgramId() {
     try {

@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { Whiplash } from "../target/types/whiplash";
+import { Facemelt } from "../target/types/facemelt";
 import { expect, assert } from "chai";
 import {
   PublicKey, 
@@ -35,12 +35,12 @@ function scaled(k: bigint): number {
   return Number(k / SCALE_FACTOR); // safe up to ~9e15 after scale
 }
 
-describe("whiplash", () => {
+describe("facemelt", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.Whiplash as Program<Whiplash>;
+  const program = anchor.workspace.Facemelt as Program<Facemelt>;
   const wallet = provider.wallet as anchor.Wallet;
 
   // Test state
