@@ -88,7 +88,7 @@ async function main() {
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf8"));
     
     // Get program ID from IDL (this is the actual deployed program ID)
-    const facemeltProgramId = new PublicKey(idl.address);
+    const facemeltProgramId = new PublicKey(idl.metadata.address);
     console.log("Program ID from IDL:", facemeltProgramId.toString());
     
     // Verify Facemelt program is deployed

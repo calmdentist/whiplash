@@ -282,6 +282,16 @@ pub fn handle_close_position(ctx: Context<ClosePosition>) -> Result<()> {
         )?;
     }
     
+    // If there are no remaining effective debts, snap effective reserves to real reserves.
+    // This prevents small rounding-dust discrepancies from lingering when the book is flat.
+    {
+        let pool = &mut ctx.accounts.pool;
+        if pool.total_delta_k_longs == 0 && pool.total_delta_k_shorts == 0 {
+            pool.effective_sol_reserve = pool.sol_reserve;
+            pool.effective_token_reserve = pool.token_reserve;
+        }
+    }
+    
     // Emit close position event
     emit!(PositionClosed {
         user: ctx.accounts.user.key(),
