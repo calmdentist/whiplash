@@ -216,6 +216,15 @@ A position enters "limbo" when it meets the liquidation condition but no liquida
 
 Facemelt enables permissionless token launches with zero seed capital, using a bonding curve model similar to pump.fun. Traders who buy the token on the bonding curve essentially fund the LP once the token reaches the bonding threshold and graduates to the AMM.
 
+\subsection{Fair-Launch Bonding Curve}
+To ensure a fair and transparent launch, Facemelt employs a fixed-supply, linear bonding curve. The process is as follows:
+\begin{enumerate}
+    \item \textbf{Total Supply Deposit}: The token creator mints the entire fixed supply (e.g., 420 million tokens) and deposits it into a program-controlled vault. This transparently commits all tokens to the launch mechanism, with no creator pre-allocation.
+    \item \textbf{Linear Bonding Curve}: A predetermined number of tokens (e.g., 280 million) are designated for sale on a linear bonding curve, where the price is a function of the number of tokens sold: $P = m \cdot Q_{\text{sold}}$. The curve is engineered to raise a fixed amount of a base asset (e.g., 200 SOL). The creator participates on the same terms as any other buyer.
+    \item \textbf{AMM Graduation}: The final purchase that meets the SOL target automatically triggers the AMM launch. The protocol uses 100\% of the raised SOL to seed one side of the liquidity pool. The other side is seeded with the remaining tokens from the initial deposit (e.g., 140 million), which is mathematically guaranteed to be exactly half the number of tokens sold.
+\end{enumerate}
+This mechanism deterministically results in a healthy, liquid market from the moment of creation, typically achieving a 1:1 ratio of total liquidity to circulating market cap. For example, a launch raising 200 SOL will create a liquidity pool valued at 400 SOL, against a circulating market cap of 400 SOL.
+
 \section{System Properties}
 
 Facemelt's design provides several important properties:

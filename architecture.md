@@ -12,6 +12,12 @@ cumulative_funding_accumulator
 last_updated_timestamp
 ema_price - exponential moving average of price (for manipulation detection)
 ema_initialized - whether EMA has been set
+pool_status - Enum (`Bonding`, `Live`)
+bonding_curve_slope_m - The slope of the linear bonding curve
+tokens_sold_on_curve - Counter for tokens sold during bonding phase
+sol_raised_on_curve - Counter for SOL raised during bonding phase
+bonding_target_sol - The target SOL to be raised (e.g., 200 SOL)
+bonding_target_tokens_sold - The target tokens to be sold (e.g., 280M)
 
 function update_funding_accumulators(self, current_timestamp):
     delta_t = current_timestamp - self.last_updated_timestamp
@@ -85,7 +91,57 @@ collateral
 
 ## Functions
 
+function launch_bonding_curve(total_supply, target_sol, target_tokens_sold):
+    # Creator deposits total_supply of the token into a program vault
+    # Pool account is created and initialized with Bonding status
+    pool.pool_status = Bonding
+    pool.bonding_target_sol = target_sol
+    pool.bonding_target_tokens_sold = target_tokens_sold
+    # Slope 'm' is calculated and stored based on targets
+    pool.bonding_curve_slope_m = (2 * target_sol) / (target_tokens_sold^2)
+    pool.tokens_sold_on_curve = 0
+    pool.sol_raised_on_curve = 0
+
+function buy_on_curve(num_tokens):
+    assert(pool.pool_status == Bonding, "Bonding phase is not active")
+    
+    # Calculate SOL cost based on the linear curve formula (integral of price)
+    q1 = pool.tokens_sold_on_curve
+    q2 = q1 + num_tokens
+    assert(q2 <= pool.bonding_target_tokens_sold, "Not enough tokens left on curve")
+    
+    sol_cost = (pool.bonding_curve_slope_m * (q2^2 - q1^2)) / 2
+    
+    # Transfer SOL from buyer to pool vault
+    transfer_sol(sol_cost, from=buyer, to=pool_vault)
+    
+    # Transfer tokens from pool vault to buyer
+    transfer_token(num_tokens, from=pool_vault, to=buyer)
+
+    # Update state
+    pool.tokens_sold_on_curve += num_tokens
+    pool.sol_raised_on_curve += sol_cost
+    
+    # Check for graduation
+    if pool.sol_raised_on_curve >= pool.bonding_target_sol:
+        self.graduate_to_amm()
+
+function graduate_to_amm():
+    # This is an internal function triggered by the final buy_on_curve call
+    pool.pool_status = Live
+    
+    lp_tokens = pool.bonding_target_tokens_sold / 2
+    
+    # The real and effective reserves are now seeded with the results of the bonding curve
+    pool.sol_reserve = pool.sol_raised_on_curve
+    pool.effective_sol_reserve = pool.sol_raised_on_curve
+    pool.token_reserve = lp_tokens
+    pool.effective_token_reserve = lp_tokens
+    
+    # Any remaining tokens in the vault are now inaccessible / effectively burned.
+
 function swap(amount_in, input_is_sol, min_amount_out):
+    assert(pool.pool_status == Live, "AMM is not live yet")
     pool.update_funding_accumulators(current_timestamp())
     amount_out = pool.calculate_output(amount_in, input_is_sol)
     assert(amount_out >= min_amount_out, "Slippage limit exceeded")
