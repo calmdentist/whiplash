@@ -67,4 +67,22 @@ pub enum FacemeltError {
     
     #[msg("Liquidation blocked: spot price diverged too far from EMA (possible manipulation)")]
     LiquidationPriceManipulation,
+    
+    #[msg("Invalid bonding curve parameters")]
+    InvalidBondingCurveParams,
+    
+    #[msg("Not enough tokens left on bonding curve")]
+    InsufficientCurveTokens,
+    
+    #[msg("Not enough SOL in bonding curve to pay out")]
+    InsufficientCurveSol,
+    
+    #[msg("Cannot sell more tokens than have been sold on curve")]
+    InsufficientTokensSold,
+    
+    #[msg("Bonding curve has already graduated")]
+    BondingCurveAlreadyGraduated,
+    
+    #[msg("Bonding curve is not active")]
+    BondingCurveNotActive,
 } 

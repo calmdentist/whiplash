@@ -59,4 +59,33 @@ pub mod facemelt {
     pub fn close_position(ctx: Context<ClosePosition>) -> Result<()> {
         instructions::close_position::handle_close_position(ctx)
     }
+
+    pub fn launch_on_curve(
+        ctx: Context<LaunchOnCurve>,
+        token_name: String,
+        token_ticker: String,
+        metadata_uri: String,
+        total_supply: Option<u64>,
+        target_sol: Option<u64>,
+        target_tokens_sold: Option<u64>,
+    ) -> Result<()> {
+        instructions::launch_on_curve::handle_launch_on_curve(
+            ctx,
+            token_name,
+            token_ticker,
+            metadata_uri,
+            total_supply,
+            target_sol,
+            target_tokens_sold,
+        )
+    }
+
+    pub fn swap_on_curve(
+        ctx: Context<SwapOnCurve>,
+        amount_in: u64,
+        min_amount_out: u64,
+        input_is_sol: bool,
+    ) -> Result<()> {
+        instructions::swap_on_curve::handle_swap_on_curve(ctx, amount_in, min_amount_out, input_is_sol)
+    }
 }

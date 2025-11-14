@@ -35,7 +35,7 @@ function scaled(k: bigint): number {
   return Number(k / SCALE_FACTOR); // safe up to ~9e15 after scale
 }
 
-describe("facemelt", () => {
+describe("facemelt_amm", () => {
   // Configure the client to use the local cluster
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -221,450 +221,6 @@ describe("facemelt", () => {
       throw error;
     }
   });
-
-  // it("Opens leverage position, performs repeated spot buy/sell cycles, then closes position", async () => {
-  //   try {
-  //     // Record initial pool state
-  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const initialK = constantProduct(initialPoolAccount);
-  //     console.log("Initial K before cycle test:", initialK.toString());
-  //     console.log("Cycle Test - Initial reserves - Real SOL:", initialPoolAccount.effectiveSolReserve.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.effectiveSolReserve.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
-  //     console.log("Cycle Test - Initial reserves - Real Tokens:", initialPoolAccount.effectiveTokenReserve.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.effectiveTokenReserve.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
-
-  //     // Generate a random nonce for this test position
-  //     const cycleTestNonce = Math.floor(Math.random() * 1000000);
-  //     const cycleTestNonceBytes = new BN(cycleTestNonce).toArrayLike(Buffer, "le", 8);
-      
-  //     // Derive the position PDA
-  //     const [cycleTestPositionPda, cycleTestPositionBump] = await PublicKey.findProgramAddressSync(
-  //       [
-  //         Buffer.from("position"),
-  //         poolPda.toBuffer(),
-  //         wallet.publicKey.toBuffer(),
-  //         cycleTestNonceBytes,
-  //       ],
-  //       program.programId
-  //     );
-      
-  //     // Calculate position token account address
-  //     const cycleTestPositionTokenAccount = await getAssociatedTokenAddress(
-  //       tokenMint,
-  //       cycleTestPositionPda,
-  //       true // allowOwnerOffCurve
-  //     );
-
-  //     // --- Step 1: Open a leveraged long position (SOL->Token) ---
-  //     const openTx = await program.methods
-  //       .leverageSwap(
-  //         new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
-  //         new BN(0),                          // minAmountOut (0 for test simplicity)
-  //         LEVERAGE,                           // leverage factor
-  //         new BN(cycleTestNonce)              // nonce
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenVault: tokenVault,
-  //         userTokenIn: wallet.publicKey,
-  //         userTokenOut: tokenAccount,
-  //         position: cycleTestPositionPda,
-  //         positionTokenAccount: cycleTestPositionTokenAccount,
-  //         positionTokenMint: tokenMint,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .rpc();
-      
-  //     await provider.connection.confirmTransaction(openTx);
-  //     console.log("Opened leveraged long position for cycle test");
-
-  //     // --- Step 2: Perform repeated spot buy/sell cycles ---
-  //     const NUM_CYCLES = 25;
-  //     const SPOT_BUY_AMOUNT = 20 * LAMPORTS_PER_SOL; // 20 SOL per cycle
-      
-  //     for (let i = 0; i < NUM_CYCLES; i++) {
-  //       console.log(`\nCycle ${i + 1}/${NUM_CYCLES}`);
-        
-  //       // Get token balance before spot buy
-  //       const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
-  //       const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
-
-  //       // Spot buy: SOL -> Token
-  //       const spotBuyTx = await program.methods
-  //         .swap(
-  //           new BN(SPOT_BUY_AMOUNT), // buy with 20 SOL
-  //           new BN(0)                // accept any output
-  //         )
-  //         .accounts({
-  //           user: wallet.publicKey,
-  //           pool: poolPda,
-  //           tokenVault: tokenVault,
-  //           userTokenIn: wallet.publicKey,  // SOL from user wallet
-  //           userTokenOut: tokenAccount,     // Tokens to user token account
-  //           tokenProgram: TOKEN_PROGRAM_ID,
-  //           systemProgram: SystemProgram.programId,
-  //         })
-  //         .rpc();
-  //       await provider.connection.confirmTransaction(spotBuyTx);
-
-  //       // Calculate tokens obtained from spot buy
-  //       const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
-  //       const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
-  //       const tokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
-        
-  //       console.log(`  Spot buy: acquired ${tokensObtained} tokens`);
-
-  //       // Spot sell: Token -> SOL (sell all tokens obtained)
-  //       if (tokensObtained > 0) {
-  //         const spotSellTx = await program.methods
-  //           .swap(
-  //             new BN(tokensObtained),  // sell all tokens obtained
-  //             new BN(0)                // accept any SOL output
-  //           )
-  //           .accounts({
-  //             user: wallet.publicKey,
-  //             pool: poolPda,
-  //             tokenVault: tokenVault,
-  //             userTokenIn: tokenAccount,      // Tokens from user token account
-  //             userTokenOut: wallet.publicKey, // SOL to user wallet
-  //             tokenProgram: TOKEN_PROGRAM_ID,
-  //             systemProgram: SystemProgram.programId,
-  //           })
-  //           .rpc();
-  //         await provider.connection.confirmTransaction(spotSellTx);
-  //         console.log(`  Spot sell: sold ${tokensObtained} tokens`);
-  //       }
-  //     }
-
-  //     console.log(`\nCompleted ${NUM_CYCLES} spot buy/sell cycles`);
-
-  //     // --- Step 3: Close the leveraged long position ---
-  //     const closeTx = await program.methods
-  //       .closePosition()
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenVault: tokenVault,
-  //         position: cycleTestPositionPda,
-  //         positionTokenAccount: cycleTestPositionTokenAccount,
-  //         userTokenOut: wallet.publicKey, // SOL back to user for long position
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .rpc();
-  //     await provider.connection.confirmTransaction(closeTx);
-  //     console.log("Closed leveraged long position");
-
-  //     // --- Step 4: Log final pool state ---
-  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const finalK = constantProduct(finalPoolAccount);
-  //     console.log("\nFinal K after cycle test:", finalK.toString());
-  //     console.log("Cycle Test - Final reserves - Real SOL:", finalPoolAccount.effectiveSolReserve.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.effectiveSolReserve.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
-  //     console.log("Cycle Test - Final reserves - Real Tokens:", finalPoolAccount.effectiveTokenReserve.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.effectiveTokenReserve.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
-
-  //     // Compare with initial state
-  //     const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
-  //     const kDiffPercentage = kDiff / scaled(initialK);
-  //     console.log("K difference percentage:", kDiffPercentage * 100, "%");
-
-  //   } catch (error) {
-  //     console.error("Cycle test Error:", error);
-  //     throw error;
-  //   }
-  // });
-  // return;
-
-  // it("Liquidation sanity test - opens leverage position and liquidates it", async () => {
-  //   try {
-  //     // Get initial pool state
-  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const initialK = constantProduct(initialPoolAccount);
-  //     console.log("Liquidation test - Initial K:", initialK.toString());
-      
-  //     // Generate a random nonce for the liquidation test position
-  //     const liquidationTestNonce = Math.floor(Math.random() * 1000000);
-  //     const liquidationTestNonceBytes = new BN(liquidationTestNonce).toArrayLike(Buffer, "le", 8);
-      
-  //     // Derive the position PDA
-  //     const [liquidationTestPositionPda, liquidationTestPositionBump] = await PublicKey.findProgramAddressSync(
-  //       [
-  //         Buffer.from("position"),
-  //         poolPda.toBuffer(),
-  //         wallet.publicKey.toBuffer(),
-  //         liquidationTestNonceBytes,
-  //       ],
-  //       program.programId
-  //     );
-      
-  //     // Calculate position token account address
-  //     const liquidationTestPositionTokenAccount = await getAssociatedTokenAddress(
-  //       tokenMint,
-  //       liquidationTestPositionPda,
-  //       true // allowOwnerOffCurve
-  //     );
-      
-  //     console.log("Opening leverage position for liquidation test...");
-      
-  //     // Open a leveraged long position (SOL->Token)
-  //     const openTx = await program.methods
-  //       .leverageSwap(
-  //         new BN(LEVERAGE_SWAP_AMOUNT),       // amountIn (collateral)
-  //         new BN(0),                          // minAmountOut (0 for test simplicity)
-  //         LEVERAGE,                           // leverage factor
-  //         new BN(liquidationTestNonce)        // nonce
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenVault: tokenVault,
-  //         userTokenIn: wallet.publicKey,
-  //         userTokenOut: tokenAccount,
-  //         position: liquidationTestPositionPda,
-  //         positionTokenAccount: liquidationTestPositionTokenAccount,
-  //         positionTokenMint: tokenMint,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .rpc();
-      
-  //     await provider.connection.confirmTransaction(openTx);
-  //     console.log("Opened leverage position for liquidation test");
-      
-  //     // Get position state before liquidation
-  //     const positionAccount = await program.account.position.fetch(liquidationTestPositionPda);
-  //     console.log("Position size:", positionAccount.size.toNumber());
-  //     console.log("Position delta_k:", positionAccount.deltaK.toString());
-      
-  //     // Get pool state after opening position
-  //     const postOpenPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const postOpenK = constantProduct(postOpenPoolAccount);
-  //     console.log("K after opening position:", postOpenK.toString());
-      
-  //     // Create a liquidator keypair
-  //     const liquidator = Keypair.generate();
-      
-  //     // Fund the liquidator
-  //     await provider.connection.confirmTransaction(
-  //       await provider.connection.requestAirdrop(
-  //         liquidator.publicKey,
-  //         0.1 * LAMPORTS_PER_SOL
-  //       )
-  //     );
-      
-  //     // Create token account for liquidator to receive rewards (for long positions)
-  //     const liquidatorTokenAccount = await getAssociatedTokenAddress(
-  //       tokenMint,
-  //       liquidator.publicKey
-  //     );
-      
-  //     const createLiquidatorATAIx = createAssociatedTokenAccountInstruction(
-  //       liquidator.publicKey,
-  //       liquidatorTokenAccount,
-  //       liquidator.publicKey,
-  //       tokenMint
-  //     );
-      
-  //     const setupLiquidatorTx = new anchor.web3.Transaction().add(createLiquidatorATAIx);
-  //     await provider.sendAndConfirm(setupLiquidatorTx, [liquidator]);
-      
-  //     console.log("Liquidating position...");
-      
-  //            // Liquidate the position
-  //      const liquidateTx = await program.methods
-  //        .liquidate()
-  //        .accounts({
-  //          liquidator: liquidator.publicKey,
-  //          positionOwner: wallet.publicKey,
-  //          pool: poolPda,
-  //          tokenVault: tokenVault,
-  //          position: liquidationTestPositionPda,
-  //          positionTokenAccount: liquidationTestPositionTokenAccount,
-  //          liquidatorRewardAccount: liquidatorTokenAccount, // Liquidator receives tokens for long position
-  //          tokenProgram: TOKEN_PROGRAM_ID,
-  //          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //          systemProgram: SystemProgram.programId,
-  //          rent: SYSVAR_RENT_PUBKEY,
-  //        })
-  //       .signers([liquidator])
-  //       .rpc();
-      
-  //     await provider.connection.confirmTransaction(liquidateTx);
-  //     console.log("Liquidated position successfully");
-      
-  //     // Verify liquidator received reward
-  //     const liquidatorTokenAccountInfo = await getAccount(provider.connection, liquidatorTokenAccount);
-  //     const liquidatorReward = Number(liquidatorTokenAccountInfo.amount);
-  //     console.log("Liquidator reward:", liquidatorReward);
-  //     expect(liquidatorReward).to.be.above(0);
-      
-  //     // Get final pool state
-  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const finalK = constantProduct(finalPoolAccount);
-  //     console.log("Final K after liquidation:", finalK.toString());
-      
-  //     // Verify K is restored (should be equal to initial K)
-  //     const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
-  //     const kDiffPercentage = kDiff / scaled(initialK);
-  //     console.log("K difference percentage:", kDiffPercentage * 100, "%");
-      
-  //     // With liquidation, K should be exactly restored
-  //     expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance for rounding
-      
-  //     console.log("Liquidation sanity test completed successfully!");
-      
-  //   } catch (error) {
-  //     console.error("Liquidation sanity test Error:", error);
-  //     throw error;
-  //   }
-  // });
-  // return;
-
-  // it("Spot buys, opens leveraged long, then sells all spot tokens without error", async () => {
-  //   try {
-  //     // Record initial pool K value
-  //     const initialPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const initialK = constantProduct(initialPoolAccount);
-  //     console.log("Initial K before new strategy:", initialK.toString());
-  //     console.log("New Strategy - Initial reserves - Real SOL:", initialPoolAccount.effectiveSolReserve.toNumber(), "Virtual SOL:", initialPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", initialPoolAccount.effectiveSolReserve.toNumber() + initialPoolAccount.virtualSolAmount.toNumber());
-  //     console.log("New Strategy - Initial reserves - Real Tokens:", initialPoolAccount.effectiveTokenReserve.toNumber(), "Virtual Tokens:", initialPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", initialPoolAccount.effectiveTokenReserve.toNumber() + initialPoolAccount.virtualTokenYAmount.toNumber());
-
-  //     // --- Step 1: Perform a spot buy (SOL -> Token) ---
-  //     const tokenAcctBeforeBuy = await getAccount(provider.connection, tokenAccount);
-  //     const tokenBalBeforeBuy = Number(tokenAcctBeforeBuy.amount);
-
-  //     const spotBuyTx = await program.methods
-  //       .swap(
-  //         new BN(SWAP_AMOUNT), // spend SOL amount for spot buy
-  //         new BN(0)            // accept any output
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenVault: tokenVault,
-  //         userTokenIn: wallet.publicKey,
-  //         userTokenOut: tokenAccount,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //       })
-  //       .rpc();
-  //     await provider.connection.confirmTransaction(spotBuyTx);
-  //     console.log("Executed spot buy (tx)", spotBuyTx);
-
-  //     const tokenAcctAfterBuy = await getAccount(provider.connection, tokenAccount);
-  //     const tokenBalAfterBuy = Number(tokenAcctAfterBuy.amount);
-  //     const spotTokensObtained = tokenBalAfterBuy - tokenBalBeforeBuy;
-  //     console.log("Spot tokens obtained:", spotTokensObtained);
-
-  //     // --- Step 2: Open a leveraged long position (SOL -> Token) ---
-  //     const stratNonce = Math.floor(Math.random() * 1000000);
-  //     const stratNonceBytes = new BN(stratNonce).toArrayLike(Buffer, "le", 8);
-
-  //     // Derive PDA + token account for the position
-  //     const [stratPositionPda, _stratBump] = await PublicKey.findProgramAddressSync(
-  //       [
-  //         Buffer.from("position"),
-  //         poolPda.toBuffer(),
-  //         wallet.publicKey.toBuffer(),
-  //         stratNonceBytes,
-  //       ],
-  //       program.programId
-  //     );
-
-  //     const stratPositionTokenAccount = await getAssociatedTokenAddress(
-  //       tokenMint,
-  //       stratPositionPda,
-  //       true // allowOwnerOffCurve
-  //     );
-
-  //     const openTx = await program.methods
-  //       .leverageSwap(
-  //         new BN(LEVERAGE_SWAP_AMOUNT),   // collateral SOL in lamports
-  //         new BN(0),             // accept any token output for simplicity
-  //         LEVERAGE,              // leverage factor
-  //         new BN(stratNonce)     // nonce
-  //       )
-  //       .accounts({
-  //         user: wallet.publicKey,
-  //         pool: poolPda,
-  //         tokenVault: tokenVault,
-  //         userTokenIn: wallet.publicKey,
-  //         userTokenOut: tokenAccount,
-  //         position: stratPositionPda,
-  //         positionTokenAccount: stratPositionTokenAccount,
-  //         positionTokenMint: tokenMint,
-  //         tokenProgram: TOKEN_PROGRAM_ID,
-  //         associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //         systemProgram: SystemProgram.programId,
-  //         rent: SYSVAR_RENT_PUBKEY,
-  //       })
-  //       .rpc();
-  //     await provider.connection.confirmTransaction(openTx);
-  //     console.log("Opened leveraged long position (tx)", openTx);
-
-  //     // --- Step 3: Sell the tokens acquired in the spot buy (Token -> SOL) ---
-  //     if (spotTokensObtained > 0) {
-  //       const sellTx = await program.methods
-  //         .swap(
-  //           new BN(200000000000000), // sell exact tokens obtained
-  //           new BN(0)                   // accept any SOL output
-  //         )
-  //         .accounts({
-  //           user: wallet.publicKey,
-  //           pool: poolPda,
-  //           tokenVault: tokenVault,
-  //           userTokenIn: tokenAccount,
-  //           userTokenOut: wallet.publicKey,
-  //           tokenProgram: TOKEN_PROGRAM_ID,
-  //           systemProgram: SystemProgram.programId,
-  //         })
-  //         .rpc();
-  //       await provider.connection.confirmTransaction(sellTx);
-  //       console.log("Sold tokens from spot buy (tx)", sellTx);
-  //     }
-
-  //     // // --- Step 4: Close the leveraged long position ---
-  //     // const closeLongTx = await program.methods
-  //     //   .closePosition()
-  //     //   .accounts({
-  //     //     user: wallet.publicKey,
-  //     //     pool: poolPda,
-  //     //     tokenVault: tokenVault,
-  //     //     position: stratPositionPda,
-  //     //     positionTokenAccount: stratPositionTokenAccount,
-  //     //     userTokenOut: wallet.publicKey, // SOL back to user for long
-  //     //     tokenProgram: TOKEN_PROGRAM_ID,
-  //     //     associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-  //     //     systemProgram: SystemProgram.programId,
-  //     //     rent: SYSVAR_RENT_PUBKEY,
-  //     //   })
-  //     //   .rpc();
-  //     // await provider.connection.confirmTransaction(closeLongTx);
-  //     // console.log("Closed leveraged long position (tx)", closeLongTx);
-
-  //     // --- Final pool K value ---
-  //     const finalPoolAccount = await program.account.pool.fetch(poolPda);
-  //     const finalK = constantProduct(finalPoolAccount);
-  //     console.log("Final K after new strategy:", finalK.toString());
-  //     console.log("New Strategy - Final reserves - Real SOL:", finalPoolAccount.effectiveSolReserve.toNumber(), "Virtual SOL:", finalPoolAccount.virtualSolAmount.toNumber(), "Total SOL:", finalPoolAccount.effectiveSolReserve.toNumber() + finalPoolAccount.virtualSolAmount.toNumber());
-  //     console.log("New Strategy - Final reserves - Real Tokens:", finalPoolAccount.effectiveTokenReserve.toNumber(), "Virtual Tokens:", finalPoolAccount.virtualTokenYAmount.toNumber(), "Total Tokens:", finalPoolAccount.effectiveTokenReserve.toNumber() + finalPoolAccount.virtualTokenYAmount.toNumber());
-
-  //     // Verify K restored within tolerance
-  //     const kDiff = Math.abs(scaled(finalK) - scaled(initialK));
-  //     const kDiffPercentage = kDiff / scaled(initialK);
-  //     console.log("K difference percentage:", kDiffPercentage * 100, "%");
-  //     // expect(kDiffPercentage).to.be.lessThan(0.0001); // 0.01% tolerance
-  //   } catch (error) {
-  //     console.error("New leverage strategy test Error:", error);
-  //     throw error;
-  //   }
-  // });
-  // return;
 
   it("Swaps SOL for tokens", async () => {
     try {
@@ -1973,4 +1529,455 @@ describe("facemelt", () => {
     }
   });
 
+});
+
+describe("facemelt_bonding_curve", () => {
+  // Configure the client to use the local cluster
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.Facemelt as Program<Facemelt>;
+  const wallet = provider.wallet as anchor.Wallet;
+
+  // Test state for bonding curve
+  const bondingTokenMintKeypair = Keypair.generate();
+  let bondingTokenMint: PublicKey;
+  let bondingTokenAccount: PublicKey;
+  let bondingCurvePda: PublicKey;
+  let bondingCurveBump: number;
+  let bondingPoolPda: PublicKey;
+  let bondingPoolBump: number;
+  let bondingTokenVault: PublicKey;
+  let bondingMetadataPda: PublicKey;
+
+  // Default bonding curve parameters
+  const DEFAULT_TOTAL_SUPPLY = new BN(420_000_000_000_000); // 420M with 6 decimals
+  const DEFAULT_TARGET_SOL = new BN(200 * LAMPORTS_PER_SOL); // 200 SOL
+  const DEFAULT_TARGET_TOKENS_SOLD = new BN(280_000_000_000_000); // 280M with 6 decimals
+  
+  const DECIMALS = 6;
+  const METADATA_URI = "https://ipfs.io/ipfs/QmTestBondingCurve";
+
+  before(async () => {
+    bondingTokenMint = bondingTokenMintKeypair.publicKey;
+    console.log("Bonding Token Mint Pubkey:", bondingTokenMint.toBase58());
+
+    // Calculate token account address
+    bondingTokenAccount = await getAssociatedTokenAddress(
+      bondingTokenMint,
+      wallet.publicKey
+    );
+    console.log("Bonding Token Account:", bondingTokenAccount.toBase58());
+
+    // Derive the bonding curve PDA
+    [bondingCurvePda, bondingCurveBump] = await PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("bonding_curve"),
+        bondingTokenMint.toBuffer(),
+      ],
+      program.programId
+    );
+    console.log("Bonding Curve PDA:", bondingCurvePda.toBase58(), "with bump:", bondingCurveBump);
+
+    // Derive the pool PDA (will be initialized on graduation)
+    [bondingPoolPda, bondingPoolBump] = await PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("pool"),
+        bondingTokenMint.toBuffer(),
+      ],
+      program.programId
+    );
+    console.log("Bonding Pool PDA:", bondingPoolPda.toBase58(), "with bump:", bondingPoolBump);
+
+    // Calculate the token vault address (owned by pool, not bonding_curve)
+    bondingTokenVault = await getAssociatedTokenAddress(
+      bondingTokenMint,
+      bondingPoolPda,
+      true // allowOwnerOffCurve
+    );
+    console.log("Bonding Token Vault:", bondingTokenVault.toBase58());
+
+    // Derive the metadata PDA
+    [bondingMetadataPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("metadata"),
+        TOKEN_METADATA_PROGRAM_ID.toBuffer(),
+        bondingTokenMint.toBuffer(),
+      ],
+      TOKEN_METADATA_PROGRAM_ID
+    );
+    console.log("Bonding Metadata PDA:", bondingMetadataPda.toBase58());
+  });
+
+  it("Launches a token on bonding curve", async () => {
+    try {
+      console.log("\n=== Launching Token on Bonding Curve ===");
+      console.log("Accounts to be passed:");
+      console.log("  authority:", wallet.publicKey.toBase58());
+      console.log("  tokenMint:", bondingTokenMint.toBase58());
+      console.log("  bondingCurve:", bondingCurvePda.toBase58());
+      console.log("  pool:", bondingPoolPda.toBase58());
+      console.log("  tokenVault:", bondingTokenVault.toBase58());
+      console.log("  metadata:", bondingMetadataPda.toBase58());
+      console.log("  systemProgram:", SystemProgram.programId.toBase58());
+      console.log("  tokenProgram:", TOKEN_PROGRAM_ID.toBase58());
+      console.log("  associatedTokenProgram:", ASSOCIATED_TOKEN_PROGRAM_ID.toBase58());
+      console.log("  tokenMetadataProgram:", TOKEN_METADATA_PROGRAM_ID.toBase58());
+      
+      // Launch token with default parameters
+      const tx = await program.methods
+        .launchOnCurve(
+          "Bonding Test Token",
+          "BOND",
+          METADATA_URI,
+          null, // Use default total supply (420M)
+          null, // Use default target SOL (200 SOL)
+          null  // Use default target tokens sold (280M)
+        )
+        .accounts({
+          authority: wallet.publicKey,
+          tokenMint: bondingTokenMint,
+          bondingCurve: bondingCurvePda,
+          pool: bondingPoolPda,
+          tokenVault: bondingTokenVault,
+          metadata: bondingMetadataPda,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          tokenMetadataProgram: TOKEN_METADATA_PROGRAM_ID,
+        })
+        .signers([wallet.payer, bondingTokenMintKeypair])
+        .rpc();
+      
+      console.log("Launch on bonding curve transaction signature:", tx);
+      await provider.connection.confirmTransaction(tx);
+
+      // Verify bonding curve state
+      const bondingCurveAccount = await program.account.bondingCurve.fetch(bondingCurvePda);
+      expect(bondingCurveAccount.authority.toString()).to.equal(wallet.publicKey.toString());
+      expect(bondingCurveAccount.tokenMint.toString()).to.equal(bondingTokenMint.toString());
+      expect(bondingCurveAccount.pool.toString()).to.equal(bondingPoolPda.toString());
+      expect(bondingCurveAccount.tokenVault.toString()).to.equal(bondingTokenVault.toString());
+      expect(bondingCurveAccount.tokensSoldOnCurve.toNumber()).to.equal(0);
+      expect(bondingCurveAccount.solRaisedOnCurve.toNumber()).to.equal(0);
+      expect(bondingCurveAccount.bondingTargetSol.toString()).to.equal(DEFAULT_TARGET_SOL.toString());
+      expect(bondingCurveAccount.bondingTargetTokensSold.toString()).to.equal(DEFAULT_TARGET_TOKENS_SOLD.toString());
+      expect(bondingCurveAccount.status).to.equal(0); // Active status
+      expect(bondingCurveAccount.bump).to.equal(bondingCurveBump);
+
+      // Verify slope was calculated correctly
+      expect(bondingCurveAccount.bondingCurveSlopeM.toString()).to.not.equal("0");
+
+      // Verify token vault has total supply
+      const vaultAccount = await getAccount(provider.connection, bondingTokenVault);
+      expect(vaultAccount.amount.toString()).to.equal(DEFAULT_TOTAL_SUPPLY.toString());
+
+      console.log("✅ Bonding curve launched successfully");
+      console.log("   Slope:", bondingCurveAccount.bondingCurveSlopeM.toString());
+      console.log("   Tokens in vault:", vaultAccount.amount.toString());
+    } catch (error) {
+      console.error("Launch on curve error:", error);
+      throw error;
+    }
+  });
+
+  it("Buys tokens on bonding curve with SOL", async () => {
+    try {
+      console.log("\n=== Buying Tokens on Bonding Curve ===");
+      
+      // Create user token account if needed
+      try {
+        await getAccount(provider.connection, bondingTokenAccount);
+      } catch {
+        const createATAIx = createAssociatedTokenAccountInstruction(
+          wallet.publicKey,
+          bondingTokenAccount,
+          wallet.publicKey,
+          bondingTokenMint
+        );
+        const transaction = new anchor.web3.Transaction().add(createATAIx);
+        await provider.sendAndConfirm(transaction);
+        console.log("Created user bonding token account");
+      }
+
+      // Get initial state
+      const initialBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      const initialTokensSold = initialBondingCurve.tokensSoldOnCurve.toNumber();
+      const initialSolRaised = initialBondingCurve.solRaisedOnCurve.toNumber();
+
+      // Buy tokens with 10 SOL
+      const buyAmount = 10 * LAMPORTS_PER_SOL;
+      const tx = await program.methods
+        .swapOnCurve(
+          new BN(buyAmount),
+          new BN(0), // No min output for test
+          true       // input_is_sol
+        )
+        .accounts({
+          user: wallet.publicKey,
+          tokenMint: bondingTokenMint,
+          bondingCurve: bondingCurvePda,
+          pool: bondingPoolPda,
+          tokenVault: bondingTokenVault,
+          userTokenAccount: bondingTokenAccount,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      
+      console.log("Buy on curve transaction signature:", tx);
+      await provider.connection.confirmTransaction(tx);
+
+      // Verify bonding curve state updated
+      const finalBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      const finalTokensSold = finalBondingCurve.tokensSoldOnCurve.toNumber();
+      const finalSolRaised = finalBondingCurve.solRaisedOnCurve.toNumber();
+
+      expect(finalTokensSold).to.be.greaterThan(initialTokensSold);
+      expect(finalSolRaised).to.equal(initialSolRaised + buyAmount);
+
+      // Verify user received tokens
+      const userTokenAccountInfo = await getAccount(provider.connection, bondingTokenAccount);
+      const tokensReceived = Number(userTokenAccountInfo.amount);
+      expect(tokensReceived).to.equal(finalTokensSold - initialTokensSold);
+
+      console.log("✅ Successfully bought tokens on bonding curve");
+      console.log("   SOL spent:", buyAmount / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Tokens received:", tokensReceived / 10**DECIMALS, "tokens");
+      console.log("   Total SOL raised:", finalSolRaised / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Total tokens sold:", finalTokensSold / 10**DECIMALS, "tokens");
+    } catch (error) {
+      console.error("Buy on curve error:", error);
+      throw error;
+    }
+  });
+
+  it("Sells tokens back to bonding curve for SOL", async () => {
+    try {
+      console.log("\n=== Selling Tokens on Bonding Curve ===");
+
+      // Get initial state
+      const initialBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      const initialTokensSold = initialBondingCurve.tokensSoldOnCurve.toNumber();
+      const initialSolRaised = initialBondingCurve.solRaisedOnCurve.toNumber();
+      
+      const initialUserTokens = Number(
+        (await getAccount(provider.connection, bondingTokenAccount)).amount
+      );
+      const initialUserSol = await provider.connection.getBalance(wallet.publicKey);
+
+      // Sell ALL tokens bought in previous test
+      const sellAmount = initialUserTokens;
+      
+      const tx = await program.methods
+        .swapOnCurve(
+          new BN(sellAmount),
+          new BN(0), // No min output for test
+          false      // input_is_sol = false (selling tokens)
+        )
+        .accounts({
+          user: wallet.publicKey,
+          tokenMint: bondingTokenMint,
+          bondingCurve: bondingCurvePda,
+          pool: bondingPoolPda,
+          tokenVault: bondingTokenVault,
+          userTokenAccount: bondingTokenAccount,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      
+      console.log("Sell on curve transaction signature:", tx);
+      await provider.connection.confirmTransaction(tx);
+
+      // Verify bonding curve state updated
+      const finalBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      const finalTokensSold = finalBondingCurve.tokensSoldOnCurve.toNumber();
+      const finalSolRaised = finalBondingCurve.solRaisedOnCurve.toNumber();
+
+      expect(finalTokensSold).to.equal(initialTokensSold - sellAmount);
+      expect(finalSolRaised).to.be.lessThan(initialSolRaised);
+
+      // Verify user token balance decreased
+      const finalUserTokens = Number(
+        (await getAccount(provider.connection, bondingTokenAccount)).amount
+      );
+      expect(finalUserTokens).to.equal(initialUserTokens - sellAmount);
+
+      // Verify user received SOL (accounting for gas)
+      const finalUserSol = await provider.connection.getBalance(wallet.publicKey);
+      const solReceived = finalUserSol - initialUserSol;
+      expect(solReceived).to.be.greaterThan(0); // Received more than gas costs
+
+      console.log("✅ Successfully sold tokens on bonding curve");
+      console.log("   Tokens sold:", sellAmount / 10**DECIMALS, "tokens");
+      console.log("   SOL received (net of gas):", solReceived / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Total SOL raised:", finalSolRaised / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Total tokens sold:", finalTokensSold / 10**DECIMALS, "tokens");
+      
+      // After selling all tokens, curve should be back to ~0 (allow tiny rounding errors)
+      expect(finalTokensSold).to.equal(0);
+      expect(finalSolRaised).to.be.lessThan(1000); // Less than 1000 lamports (essentially 0)
+      expect(finalUserTokens).to.equal(0);
+      console.log("✅ Curve reset to zero after selling all tokens");
+    } catch (error) {
+      console.error("Sell on curve error:", error);
+      throw error;
+    }
+  });
+
+  it("Graduates to AMM when target SOL is reached", async () => {
+    try {
+      console.log("\n=== Graduating Bonding Curve to AMM ===");
+
+      // Get current state - should be reset to 0 after previous test
+      const currentBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      const currentSolRaised = currentBondingCurve.solRaisedOnCurve.toNumber();
+      const currentTokensSold = currentBondingCurve.tokensSoldOnCurve.toNumber();
+      const targetSol = currentBondingCurve.bondingTargetSol.toNumber();
+      const targetTokens = currentBondingCurve.bondingTargetTokensSold.toNumber();
+      
+      console.log("Current SOL raised:", currentSolRaised / LAMPORTS_PER_SOL, "SOL");
+      console.log("Current tokens sold:", currentTokensSold / 10**DECIMALS, "tokens");
+      console.log("Target SOL:", targetSol / LAMPORTS_PER_SOL, "SOL");
+      console.log("Target tokens:", targetTokens / 10**DECIMALS, "tokens");
+      
+      // Verify curve was reset to ~0 from previous test (allow tiny rounding errors)
+      expect(currentSolRaised).to.be.lessThan(1000); // Less than 1000 lamports (essentially 0)
+      expect(currentTokensSold).to.equal(0);
+
+      // Buy MORE than needed (300 SOL) to test refund mechanism
+      // Note: 280M tokens only costs ~92 SOL based on bonding curve formula
+      // Graduation triggers when hitting token target (280M), not SOL target (200)
+      // Should refund ~208 SOL back to user
+      const finalBuyAmount = 300 * LAMPORTS_PER_SOL;
+      
+      console.log("Buying", finalBuyAmount / LAMPORTS_PER_SOL, "SOL to buy all 280M tokens");
+      console.log("Note: Will graduate when 280M tokens sold (not 200 SOL)");
+      
+      // Record user SOL balance before buy
+      const userSolBefore = await provider.connection.getBalance(wallet.publicKey);
+      
+      const tx = await program.methods
+        .swapOnCurve(
+          new BN(finalBuyAmount),
+          new BN(0),
+          true
+        )
+        .accounts({
+          user: wallet.publicKey,
+          tokenMint: bondingTokenMint,
+          bondingCurve: bondingCurvePda,
+          pool: bondingPoolPda,
+          tokenVault: bondingTokenVault,
+          userTokenAccount: bondingTokenAccount,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      
+      console.log("Final buy transaction signature:", tx);
+      await provider.connection.confirmTransaction(tx);
+      
+      // Check user SOL balance after to verify refund
+      const userSolAfter = await provider.connection.getBalance(wallet.publicKey);
+      const actualSolSpent = userSolBefore - userSolAfter;
+      const actualRefund = finalBuyAmount - actualSolSpent;
+      
+      console.log("\n=== Refund Verification ===");
+      console.log("   Attempted to buy with:", finalBuyAmount / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Actually spent:", actualSolSpent / LAMPORTS_PER_SOL, "SOL (including gas)");
+      console.log("   Refund received: ~", actualRefund / LAMPORTS_PER_SOL, "SOL");
+      
+      // Verify refund happened
+      // Note: Buying 280M tokens from 0 costs ~92 SOL based on bonding curve formula
+      // So we should get ~208 SOL refunded from 300 SOL
+      expect(actualRefund).to.be.greaterThan(200 * LAMPORTS_PER_SOL); // At least 200 SOL refunded
+      expect(actualRefund).to.be.lessThan(210 * LAMPORTS_PER_SOL); // At most 210 SOL refunded
+      console.log("✅ Excess SOL refunded correctly!");
+
+      // Verify bonding curve graduated
+      const graduatedBondingCurve = await program.account.bondingCurve.fetch(bondingCurvePda);
+      expect(graduatedBondingCurve.status).to.equal(1); // Graduated status
+      console.log("\n✅ Bonding curve status: Graduated");
+      console.log("   Final SOL raised:", graduatedBondingCurve.solRaisedOnCurve.toNumber() / LAMPORTS_PER_SOL, "SOL");
+      console.log("   Final tokens sold:", graduatedBondingCurve.tokensSoldOnCurve.toNumber() / 10**DECIMALS, "tokens (should be 280M)");
+      
+      // Should have sold all 280M tokens
+      expect(graduatedBondingCurve.tokensSoldOnCurve.toNumber()).to.equal(targetTokens);
+      
+      // Get the actual SOL raised
+      const actualSolRaised = graduatedBondingCurve.solRaisedOnCurve.toNumber();
+
+      // Verify pool was initialized correctly
+      const poolAccount = await program.account.pool.fetch(bondingPoolPda);
+      
+      // Pool should have the actual SOL that was raised (not necessarily 200)
+      expect(poolAccount.solReserve.toNumber()).to.equal(actualSolRaised);
+      expect(poolAccount.effectiveSolReserve.toNumber()).to.equal(actualSolRaised);
+      
+      // Pool should have half of target_tokens_sold (140M with defaults)
+      const expectedLpTokens = DEFAULT_TARGET_TOKENS_SOLD.toNumber() / 2;
+      expect(poolAccount.tokenReserve.toNumber()).to.equal(expectedLpTokens);
+      expect(poolAccount.effectiveTokenReserve.toNumber()).to.equal(expectedLpTokens);
+      
+      // Verify EMA was initialized
+      expect(poolAccount.emaInitialized).to.be.true;
+      expect(poolAccount.emaPrice.toString()).to.not.equal("0");
+      
+      console.log("\n✅ Pool initialized correctly after graduation");
+      console.log("   SOL reserve:", poolAccount.solReserve.toNumber() / LAMPORTS_PER_SOL, "SOL (actual amount raised)");
+      console.log("   Token reserve:", poolAccount.tokenReserve.toNumber() / 10**DECIMALS, "tokens (140M = half of 280M)");
+      console.log("   EMA initialized:", poolAccount.emaInitialized);
+      console.log("   EMA price:", poolAccount.emaPrice.toString());
+
+      // Calculate constant product K
+      const k = BigInt(poolAccount.effectiveSolReserve.toString()) * 
+                BigInt(poolAccount.effectiveTokenReserve.toString());
+      console.log("   Constant product K:", k.toString());
+
+      // Verify pool can now be used for regular swaps
+      console.log("\n=== Testing Post-Graduation AMM Swap ===");
+      
+      // Try a small swap to verify AMM is working
+      const testSwapTx = await program.methods
+        .swap(
+          new BN(1 * LAMPORTS_PER_SOL),
+          new BN(0)
+        )
+        .accounts({
+          user: wallet.publicKey,
+          pool: bondingPoolPda,
+          tokenVault: bondingTokenVault,
+          userTokenIn: wallet.publicKey,
+          userTokenOut: bondingTokenAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      
+      await provider.connection.confirmTransaction(testSwapTx);
+      console.log("✅ Post-graduation AMM swap successful");
+      console.log("   Swap transaction signature:", testSwapTx);
+
+      // Verify K is maintained after swap
+      const poolAfterSwap = await program.account.pool.fetch(bondingPoolPda);
+      const kAfterSwap = BigInt(poolAfterSwap.effectiveSolReserve.toString()) * 
+                         BigInt(poolAfterSwap.effectiveTokenReserve.toString());
+      
+      // K should increase slightly due to rounding in our favor
+      expect(kAfterSwap >= k).to.be.true;
+      console.log("   K after swap:", kAfterSwap.toString());
+      console.log("   K maintained: ✅");
+
+      console.log("\n🎉 Bonding curve successfully graduated to AMM!");
+      console.log("   The pool is now fully functional for leverage trading");
+    } catch (error) {
+      console.error("Graduation error:", error);
+      throw error;
+    }
+  });
 });

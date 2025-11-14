@@ -65,7 +65,7 @@ impl Pool {
     pub const EMA_HALF_LIFE_SECONDS: i64 = 5 * 60;
     
     // Fixed-point precision for price calculations
-    const PRICE_PRECISION: u128 = 1u128 << 64; // 2^64
+    pub const PRICE_PRECISION: u128 = 1u128 << 64; // 2^64
     
     // Update the funding rate accumulators based on time elapsed
     pub fn update_funding_accumulators(&mut self, current_timestamp: i64) -> Result<()> {
